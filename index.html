@@ -88,7 +88,9 @@
     var player = null;
 
     let loadedChannelInstruments = {}; // Store necessary instruments for midi file playback
+    let drumInstrument = null;
     let availableInstrumentsForProgramChange = {};
+    let availableDrumSoundsForNote = {};
     var midiNotes = [];
 
     window.onload = function () {
@@ -147,6 +149,38 @@
     }
 
     function onMIDISuccess(midiAccess) {
+
+      var midiInputs = [];
+      var inputs = midiAccess.inputs.values();
+      midiInputs = Array.from(midiAccess.inputs.values());
+      var midiInputsSelect = document.getElementById("midiInputs");
+
+      // Add MidiPlayer as first MIDI output option
+      var option = document.createElement("option");
+      option.value = 0;
+      option.text = "MidiPlayer";
+      midiInputsSelect.add(option);
+
+      midiInputs.forEach((input, index) => {
+        var option = document.createElement("option");
+        option.value = index;
+        option.text = input.name;
+        midiInputsSelect.add(option);
+      });
+
+      // Preselect the first MIDI input and output
+      if (midiInputs.length > 0) {
+        midiInputsSelect.selectedIndex = 0;
+        // midiInputs[0].onmidimessage = onMIDIMessage;
+      }
+
+      midiInputsSelect.onchange = function() {
+        var selectedInput = midiInputs[midiInputsSelect.value];
+        midiInputs.forEach(input => input.onmidimessage = null); // Clear previous handlers
+        if (selectedInput && (midiInputsSelect.selectedIndex > 0)) {
+          selectedInput.onmidimessage = onMIDIMessage;
+        }
+      };
 
       var midiOutputs = [];
       midiOutputsSelect = document.getElementById("midiOutputs");
@@ -226,16 +260,31 @@
               }
             } else if (message[1] === 7) {
               // Volume
-              loadedChannelInstruments[channel].gainNode.gain.value = message[2] / 127;
+              // console.log("Volume change:", message[2], "on channel:", channel);
+              if (channel === 9) {
+                drumInstrument.gainNode.gain.value = message[2] / 127;
+                // console.log("Volume change:", message[2], "on DRUMchannel");
+              } else {
+                // console.log("Volume change:", message[2], "on channel:", channel);
+                loadedChannelInstruments[channel].gainNode.gain.value = message[2] / 127;
+              }
             } else if (message[1] === 10) {
               // Pan
-              loadedChannelInstruments[channel].panNode.pan.value = (message[2] - 64) / 64;
+              if (channel === 9) {
+                drumInstrument.panNode.pan.value = (message[2] - 64) / 64;
+                // console.log("Pan change:", message[2], "on DRUMchannel");
+              } else {
+                // console.log("Pan change:", message[2], "on channel:", channel);
+                loadedChannelInstruments[channel].panNode.pan.value = (message[2] - 64) / 64;
+              }
             }
           } else if (message[0] >= 0xC0 && message[0] < 0xD0) {
             // Program change
             // set the instrument for the channel
-            programNumber = message[1];
-            loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[programNumber].preset;
+            if (channel != 9) {
+              programNumber = message[1];
+              loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[programNumber].preset;
+            }
           }
         }
         else {
@@ -273,7 +322,7 @@
         loader.audiolib.setFloatParameter("mode", value);
       }
       var negRoots = document.getElementById("negRoots");
-      negRoots.hidden = (value == 1) ? false : true;
+      negRoots.hidden = (value == 2) ? false : true;
       var perOkt = document.getElementById("perOkt");
       perOkt.hidden = (value == 0) ? true : false;
       sendEvent_allNotesOff();
@@ -309,20 +358,20 @@
 
       // Handle MIDI file upload
       document.getElementById('midiUpload').addEventListener('change', (event) => {
-        console.log("Loading MIDI file...");
+        // console.log("Loading MIDI file...");
         const file = event.target.files[0];
         if (file) {
           const reader = new FileReader();
           reader.onload = function (e) {
             // Parse the MIDI file using MidiConvert
-            const midi = MidiConvert.parse(e.target.result);
-            midiData = midi; // Store parsed MIDI data
-            console.log(midi);
+            const readMidiFile = MidiConvert.parse(e.target.result);
+            midiData = readMidiFile; // Store parsed MIDI data
+            // console.log(midi);
 
             //Get bpm from midi file if present
-            if (midi.header.bpm) {
-              bpm = midi.header.bpm;
-              console.log("BPM from MIDI file:", bpm);
+            if (readMidiFile.header.bpm) {
+              bpm = readMidiFile.header.bpm;
+              // console.log("BPM from MIDI file:", bpm);
               Tone.Transport.bpm.value = (bpm * speed).toFixed(1);
               const label = document.querySelector('label[for="speedControl"]');
               if (label) {
@@ -330,7 +379,7 @@
               }
             }
             else {
-              console.log("No BPM found in MIDI file. Defaulting to 120 bpm.");
+              // console.log("No BPM found in MIDI file. Defaulting to 120 bpm.");
               Tone.Transport.bpm.value = 120; // Default to 120 bpm
               speedSlider.label = "Speed: 120bpm";
             }
@@ -343,7 +392,7 @@
             scheduleMIDIEvents(midiData);
           };
           reader.readAsArrayBuffer(file);
-          console.log("MIDI file loaded.");
+          // console.log("MIDI file loaded.");
         }
         else {
           console.error("No MIDI file selected.");
@@ -359,7 +408,6 @@
         // Loop through each track in the MIDI file
         midi.tracks.forEach((track, trackIndex) => {
           const part = new Tone.Part((time, note) => {
-            // ach noteon event with midinumber, velocity and channel
             // console.log("Playing noteon:", note.midi, "velocity:", Math.floor(note.velocity * 127), "on channel:", note.channel);
             onMIDIMessage({
               data: [0x90 + note.channel, note.midi, Math.floor(note.velocity * 127)]
@@ -375,7 +423,7 @@
           }, track.notes.map(note => ({
             time: note.time,           // MIDI event time
             midi: note.midi,           // MIDI note number
-            duration: note.duration * speed,   // Note duration
+            duration: note.duration,   // Note duration
             velocity: note.velocity,    // Note velocity
             channel: Math.max(track.channelNumber || 0, 0) // MIDI channel
           })));
@@ -402,7 +450,10 @@
           // Schedule program change events
           if (track.instrumentNumber !== undefined) {
             const programChange = Math.max(track.instrumentNumber || 0, 0);
-            loadInstrumentsForProgramChange(Math.max(track.channelNumber || 0, 0), programChange); // preload needed instruments
+            const channel = Math.max(track.channelNumber || 0, 0);
+            if (track.channelNumber != 9) {
+              loadInstrumentsForProgramChange(channel, programChange); // preload needed instruments
+            }
             if (programChange >= 0) {
               const ppart = new Tone.Part((time, event) => {
                 // Log each program change event with program number and channel to console
@@ -417,6 +468,15 @@
               }]);
               parts.push(ppart);
               ppart.start();
+            }
+            //collect notenumbers for drum sounds
+            if (track.channelNumber === 9) {
+              track.notes.forEach(note => {
+                if (!availableDrumSoundsForNote[note.midi]) {
+                  loadDrumSoundForNote(note.midi);
+                  // console.log("Drum sound:", availableDrumSoundsForNote[note.midi]);
+                }
+              });
             }
           }
           parts.push(part);
@@ -464,19 +524,37 @@
         return new Promise((resolve, reject) => {
           var name = '_tone_'+url.split('/').pop().replace('.js', '');
           player.loader.startLoad(audioContext, url, name);
-          player.loader.waitLoad(function () {
+          // player.loader.waitLoad(function () {
+            console.log('Preset loaded:', name);
             resolve(name);
-          });
+          // });
+        });
+      }
+
+      function loadDrumSound(url) {
+        return new Promise((resolve, reject) => {
+          var name = '_drum_'+url;
+          url = "https://surikov.github.io/webaudiofontdata/sound/128"+links.urls[0]+".js"
+          player.loader.startLoad(audioContext, url, name);
+          // player.loader.waitLoad(function () {
+            console.log('Drum sound loaded:', name);
+            resolve(name);
+          // });
         });
       }
 
       // Play note on event after preset is fully loaded
       window.handleNoteOnForChannel = function(note, velocity, channel) {
         handleNoteOff(channel, note.midi);
-        instrument = loadedChannelInstruments[channel];
-        var envelope = player.queueWaveTable(audioContext, instrument.gainNode, window[instrument.preset], 
+        if (channel === 9) {;
+          var envelope = player.queueWaveTable(audioContext, drumInstrument.gainNode, window[drumInstrument.notes[note.midi]], 
             audioContext.currentTime, note.midi, 9999, velocity); // Long duration to ensure sustained note
-
+        }
+        else {
+          var instrument = loadedChannelInstruments[channel];
+          var envelope = player.queueWaveTable(audioContext, instrument.gainNode, window[instrument.preset], 
+              audioContext.currentTime, note.midi, 9999, velocity); // Long duration to ensure sustained note
+        }
         
         // Store the audio source for later stopping it on note off
         var note = {
@@ -530,6 +608,49 @@
         }
       }
 
+      window.loadDrumSoundForNote = function(note) {
+        if (!availableDrumSoundsForNote[note]) {
+          links = linksForDrumSound(note);
+          // console.log('Available drum sounds for note:', availableDrumSoundsForNote[note]);
+          const drumSoundUrl = links.urls[0]; // Load the first drum sound for now
+          addNoteToDrumInstrument(note, "loading");
+          loadDrumSound(drumSoundUrl)
+            .then((preset) => {
+              availableDrumSoundsForNote[note].preset = preset;
+              addNoteToDrumInstrument(note, availableDrumSoundsForNote[note].preset);
+              // console.log('Drum sound loaded and decoded. AVAILABLE:', availableDrumSoundsForNote);
+            })
+            .catch((error) => {
+              console.error('Error loading drum sound:', error);
+            });
+        } else {
+          if (availableDrumSoundsForNote[note].preset === "loading") {
+            // console.log('Drum sound is already loading:', note, availableDrumSoundsForNote[note]);
+            setTimeout(() => {
+              loadDrumSoundForNote(note);
+            }, 300);
+            return;
+          }
+          else {
+            addNoteToDrumInstrument(note, availableDrumSoundsForNote[note].preset);
+          }
+        }
+      }
+
+      function addNoteToDrumInstrument (note, preset) {
+        if (!drumInstrument) {
+          var gainNode = audioContext.createGain();
+          gainNode.gain.value = 1;
+          var panNode = audioContext.createStereoPanner();
+          panNode.pan.value = 0;
+          gainNode.connect(panNode);
+          panNode.connect(audioContext.destination);
+          drumInstrument = {notes: {}, gainNode: gainNode, panNode: panNode};
+        }
+        drumInstrument.notes[note] = preset;
+        console.log('Drum instrument:', drumInstrument);
+      }
+
       function createChannelInstrumentForChannel (channel, preset) {
         var gainNode = audioContext.createGain();
         gainNode.gain.value = 1;
@@ -554,6 +675,15 @@
         var nn = player.loader.findInstrument(i);
         availableInstrumentsForProgramChange[i] = {name:player.loader.instrumentInfo(nn).title, urls:player.loader.instrumentKeys().filter(url => url.startsWith(filter)), preset:"loading"};
         return availableInstrumentsForProgramChange[i];
+      }
+
+      function linksForDrumSound(i) {
+        filter = i.toString();
+        var nn = player.loader.findDrum(i);
+        info = player.loader.drumInfo(nn);
+        availableDrumSoundsForNote[i] = {name:info.title, urls:player.loader.drumKeys().filter(url => url.startsWith(filter)), preset:"loading"};
+        console.log("Drum sound:", i, availableDrumSoundsForNote[i]);
+        return availableDrumSoundsForNote[i];
       }
     }
   </script>
@@ -580,48 +710,48 @@
           <label for="parameter_mode_1">normal</label><br>
           <input id="parameter_mode_2" type="radio" name="mode" value="1.0" checked
             onchange="updateSlider_mode(value);">
-          <label for="parameter_mode_2">negative Harmony</label><br>
+          <label for="parameter_mode_2">lefthand Piano</label><br>
           <input id="parameter_mode_3" type="radio" name="mode" value="2.0" onchange="updateSlider_mode(value);">
-          <label for="parameter_mode_3">lefthand Piano</label><br>
+          <label for="parameter_mode_3">negative Harmony</label><br>
         </div>
       </div>
       <div id="negRoots">
         <h3>Root:</h3>
         <div>
-          <input id="parameter_negRoot_1" type="radio" name="negRoot" value="0.0"
+          <input id="parameter_negRoot_1" type="radio" name="negRoot" value="57"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_1">Gb</label><br>
-          <input id="parameter_negRoot_2" type="radio" name="negRoot" value="1.0"
+          <input id="parameter_negRoot_2" type="radio" name="negRoot" value="64"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_2">Db</label><br>
-          <input id="parameter_negRoot_3" type="radio" name="negRoot" value="2.0"
+          <input id="parameter_negRoot_3" type="radio" name="negRoot" value="59"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_3">Ab</label><br>
-          <input id="parameter_negRoot_4" type="radio" name="negRoot" value="3.0"
+          <input id="parameter_negRoot_4" type="radio" name="negRoot" value="66"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_4">Eb</label><br>
-          <input id="parameter_negRoot_5" type="radio" name="negRoot" value="4.0"
+          <input id="parameter_negRoot_5" type="radio" name="negRoot" value="61"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_5">Bb</label><br>
-          <input id="parameter_negRoot_6" type="radio" name="negRoot" value="5.0"
+          <input id="parameter_negRoot_6" type="radio" name="negRoot" value="56"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_6">F</label><br>
-          <input id="parameter_negRoot_7" type="radio" name="negRoot" value="6.0" checked
+          <input id="parameter_negRoot_7" type="radio" name="negRoot" value="63" checked
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_7">C</label><br>
-          <input id="parameter_negRoot_8" type="radio" name="negRoot" value="7.0"
+          <input id="parameter_negRoot_8" type="radio" name="negRoot" value="58"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_8">G</label><br>
-          <input id="parameter_negRoot_9" type="radio" name="negRoot" value="8.0"
+          <input id="parameter_negRoot_9" type="radio" name="negRoot" value="65"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_9">D</label><br>
-          <input id="parameter_negRoot_10" type="radio" name="negRoot" value="9.0"
+          <input id="parameter_negRoot_10" type="radio" name="negRoot" value="60"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_10">A</label><br>
-          <input id="parameter_negRoot_11" type="radio" name="negRoot" value="10.0"
+          <input id="parameter_negRoot_11" type="radio" name="negRoot" value="67"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_11">E</label><br>
-          <input id="parameter_negRoot_12" type="radio" name="negRoot" value="11.0"
+          <input id="parameter_negRoot_12" type="radio" name="negRoot" value="62"
             onchange="updateSlider_negRoot(value);">
           <label for="parameter_negRoot_12">B(deutsch: H)</label><br>
         </div>
@@ -647,6 +777,10 @@
         <!-- Speed control slider (0.5x to 2x) -->
         <label for="speedControl">Playback Speed: </label>
         <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
+      </div>
+      <div>
+        <div>MIDI inputs:</div>
+        <select id="midiInputs" onchange="console.log(this.value)"></select>
       </div>
       <div>
         <div>MIDI output:</div>
