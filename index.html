@@ -9,7 +9,7 @@
   <script type="application/javascript" src="./heavy.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js"></script>
   <script src="https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/midiconvert@0.4.7/build/MidiConvert.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/midiconvert@0.4.7/build/MidiConvert.js"></script>
 
   <style>
     .horizontal {
@@ -80,7 +80,7 @@
   <script type="text/javascript">
     var heavyModule = null;
     var loader = null;
-    midioutPort = null;
+    var midioutPort = null;
     var midiOutputsSelect = null;
     bpm = 120;
     var speed = 1.0;
@@ -92,7 +92,8 @@
     let availableInstrumentsForProgramChange = {};
     let availableDrumSoundsForNote = {};
     var midiNotes = [];
-
+    let noMidi = true;
+    
     window.onload = function () {
       heavy_Module().then(loadedModule => {
         heavyModule = loadedModule;
@@ -126,6 +127,10 @@
           // updateSlider_negRoot(5.0);
           Tone.start();
           setupGMPlayer();
+          var startPrompt = document.getElementById("start_prompt");
+          startPrompt.hidden = true;
+          var transportButton = document.getElementById("col_transport");
+          transportButton.style = "";
         });
       }
       loader.start();
@@ -150,6 +155,7 @@
 
     function onMIDISuccess(midiAccess) {
 
+      noMidi = false;
       var midiInputs = [];
       var inputs = midiAccess.inputs.values();
       midiInputs = Array.from(midiAccess.inputs.values());
@@ -173,7 +179,6 @@
         midiInputsSelect.selectedIndex = 0;
         // midiInputs[0].onmidimessage = onMIDIMessage;
       }
-
       midiInputsSelect.onchange = function() {
         var selectedInput = midiInputs[midiInputsSelect.value];
         midiInputs.forEach(input => input.onmidimessage = null); // Clear previous handlers
@@ -182,47 +187,84 @@
         }
       };
 
-      var midiOutputs = [];
+
       midiOutputsSelect = document.getElementById("midiOutputs");
+      var midiOutputs = [];
       var outputs = midiAccess.outputs.values();
       midiOutputs = Array.from(midiAccess.outputs.values());
       // Add WebAudioFont as first MIDI output option
       var option = document.createElement("option");
-      option.value = 0;
+      option.value = -1;
       option.text = "WebAudioFont";
       midiOutputsSelect.add(option);
 
       midiOutputs.forEach((output, index) => {
         var option = document.createElement("option");
-        option.value = index + 1;
+        option.value = index;
         option.text = output.name;
         midiOutputsSelect.add(option);
       });
 
       if (midiOutputs.length > 1) {
         midiOutputsSelect.selectedIndex = 0;
-        midioutPort = midiOutputs[0];
+        // midioutPort = midiOutputs[0];
       }
 
       midiOutputsSelect.onchange = function () {
-        midioutPort = midiOutputs[midiOutputsSelect.value - 1];
+        if (!midioutPort) {
+          // manually send allnotesoff to all channels for webaudiofont
+            setTimeout(() => {
+              for (const note of midiNotes) {
+                handleNoteOff(note.channel, {midi: note.pitch});
+              }
+            }, 500);
+        }
+        else {
+          // manually send allnotesoff to all channels for external midi devices
+          midioutPort.send([0xB0, 120, 0]);
+          midioutPort.send([0xB1, 120, 0]);
+          midioutPort.send([0xB2, 120, 0]);
+          midioutPort.send([0xB3, 120, 0]);
+          midioutPort.send([0xB4, 120, 0]);
+          midioutPort.send([0xB5, 120, 0]);
+          midioutPort.send([0xB6, 120, 0]);
+          midioutPort.send([0xB7, 120, 0]);
+          midioutPort.send([0xB8, 120, 0]);
+          midioutPort.send([0xB9, 120, 0]);
+          midioutPort.send([0xBA, 120, 0]);
+          midioutPort.send([0xBB, 120, 0]);
+        }
+        midioutPort = midiOutputs[midiOutputsSelect.value];
+        if (midioutPort) {
+          midioutPort.onmidimessage = onMidiOutMessage;
+          console.log("Selected MIDI output:", midioutPort.name);
+        }
+        // else {
+          // console.error("No MIDI output port available.");
+        // }
       };
     }
 
     function onMIDIFailure(msg) {
+      var midiIn = document.getElementById("midiIn");
+      midiIn.innerHTML = "No MIDI available.";
+      midiOut = document.getElementById("midiOut");
+      midiOut.innerHTML = "";
       console.error(`Failed to get MIDI access - ${msg}`);
     }
 
     function onMIDIMessage(message) {
       if (loader.webAudioWorklet) {
         loader.sendMidi(message.data);
+        // console.log("Received MIDI message:", message.data);
       } else {
         loader.audiolib.sendMidi(message.data);
+        // console.log("Received MIDI message:", message.data);
       }
     }
 
     function onMidiOutMessage(message) {
-      if (midioutPort !== null && midiOutputsSelect != null && midiOutputsSelect.selectedIndex != 0) {
+      if (!noMidi && midiOutputsSelect.selectedIndex != 0) {
         try {
           midioutPort.send(message);
           // console.log("Sent MIDI message:", message);
@@ -231,7 +273,7 @@
         }
       }
       else {
-        if (midiOutputsSelect != null && midiOutputsSelect.selectedIndex === 0) {
+        if (noMidi || (midiOutputsSelect != null && midiOutputsSelect.selectedIndex === 0)) {
           channel = message[0] & 0x0F;
           if (message[0] >= 0x80 && message[0] < 0x90) {
             // Note off
@@ -410,7 +452,7 @@
           const part = new Tone.Part((time, note) => {
             // console.log("Playing noteon:", note.midi, "velocity:", Math.floor(note.velocity * 127), "on channel:", note.channel);
             onMIDIMessage({
-              data: [0x90 + note.channel, note.midi, Math.floor(note.velocity * 127)]
+              data: [0x90 + note.channel, note.midi, Math.floor(Math.pow(note.velocity, 2) * 127)]
             });
             // after the note duration send the release
             Tone.Transport.scheduleOnce((releaseTime) => {
@@ -545,6 +587,7 @@
 
       // Play note on event after preset is fully loaded
       window.handleNoteOnForChannel = function(note, velocity, channel) {
+        // console.log("Velocity:", velocity, "Channel:", channel, "Note:", note.midi);
         handleNoteOff(channel, note.midi);
         if (channel === 9) {;
           var envelope = player.queueWaveTable(audioContext, drumInstrument.gainNode, window[drumInstrument.notes[note.midi]], 
@@ -693,13 +736,16 @@
   <div class="widget">
     <div class="row title">
       <div class="col">
-        <h2>heavy</h2>
+        <h2>negative Harmony</h2>
       </div>
-      <div class="col transport">
-        <label>
-          start / stop
-          <input type="checkbox" id="transportButton" onchange="toggleTransport();">
-        </label>
+      <div id="col_transport" class="col transport" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center;">
+        <div style="text-align: center;">
+          <h3 id="start_prompt" style="color: red;">please click start here first:</h3>
+          <label>
+        start / stop
+        <input type="checkbox" id="transportButton" onchange="toggleTransport();">
+          </label>
+        </div>
       </div>
     </div>
     <div style="display: flex; justify-content: space-around; align-items: center;">
@@ -708,10 +754,10 @@
         <div>
           <input id="parameter_mode_1" type="radio" name="mode" value="0.0" onchange="updateSlider_mode(value);">
           <label for="parameter_mode_1">normal</label><br>
-          <input id="parameter_mode_2" type="radio" name="mode" value="1.0" checked
-            onchange="updateSlider_mode(value);">
+          <input id="parameter_mode_2" type="radio" name="mode" value="1.0" onchange="updateSlider_mode(value);">
           <label for="parameter_mode_2">lefthand Piano</label><br>
-          <input id="parameter_mode_3" type="radio" name="mode" value="2.0" onchange="updateSlider_mode(value);">
+          <input id="parameter_mode_3" type="radio" name="mode" value="2.0"  checked
+            onchange="updateSlider_mode(value);">
           <label for="parameter_mode_3">negative Harmony</label><br>
         </div>
       </div>
@@ -778,11 +824,11 @@
         <label for="speedControl">Playback Speed: </label>
         <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
       </div>
-      <div>
+      <div id="midiIn">
         <div>MIDI inputs:</div>
         <select id="midiInputs" onchange="console.log(this.value)"></select>
       </div>
-      <div>
+      <div id="midiOut">
         <div>MIDI output:</div>
         <select id="midiOutputs" onchange="console.log(this.value)"></select>
       </div>
