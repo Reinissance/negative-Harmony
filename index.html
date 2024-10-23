@@ -94,6 +94,8 @@
     var midiNotes = []; // Store the notes played by the midi player to stop them on note off
     let loadedChannelControlValues = {}; // on midiFile load, store the control values for each channel
     let noMidi = true; // Flag to check if no MIDI devices are available
+    let lastNotes = []; // Store the last notes played by the midi player to check the piece's key
+    let midiData;
     
     window.onload = function () {
       heavy_Module().then(loadedModule => {
@@ -132,7 +134,7 @@
           transportButton.style = "";
 
           checkForLinkedMidiFile();
-          
+
         });
       }
       loader.start();
@@ -432,7 +434,6 @@
     function setupMidiPlayer() {
       // MIDI player code
 
-      let midiData;
       var playing = false;
       var playBtn = document.getElementById('playMidi');
       let parts = []; // Store the scheduled MIDI parts
@@ -491,7 +492,7 @@
 
         // Loop through each track in the MIDI file
         midi.tracks.forEach((track, trackIndex) => {
-          const part = new Tone.Part((time, note) => {
+          const part = new Tone.Part((time, note, channel) => {
             onMIDIMessage({
               data: [0x90 + note.channel, note.midi, Math.floor(Math.pow(note.velocity, 2) * 127)]
             });
@@ -561,7 +562,8 @@
             }
           }
         });
-        console.log("ControlValues:", loadedChannelControlValues);
+        // console.log("ControlValues:", loadedChannelControlValues);
+        console.log("Last notes played:", lastNotes);
 
         // Start all parts
         parts.forEach(part => part.start());
