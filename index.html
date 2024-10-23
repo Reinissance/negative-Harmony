@@ -130,6 +130,9 @@
           startPrompt.hidden = true;
           var transportButton = document.getElementById("col_transport");
           transportButton.style = "";
+
+          checkForLinkedMidiFile();
+          
         });
       }
       loader.start();
@@ -360,6 +363,41 @@
       }
     }
 
+    function checkForLinkedMidiFile() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const midiFileUrl = urlParams.get('midiFile');
+      if (midiFileUrl) {
+        fetch(midiFileUrl)
+          .then(response => response.arrayBuffer())
+          .then(data => {
+        const readMidiFile = MidiConvert.parse(data);
+        midiData = readMidiFile;
+        console.log(midiData);
+
+        // reset speed and speed slider to 1
+        speedSlider.value = 1;
+        speed = 1;
+
+        // Get bpm from midi file if present
+        if (readMidiFile.header.bpm) {
+          bpm = readMidiFile.header.bpm;
+          Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
+          const label = document.querySelector('label[for="speedControl"]');
+          if (label) {
+            label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
+          }
+        } else {
+          Tone.Transport.bpm.value = 120; // Default to 120 bpm
+          speedSlider.label = "Speed: 120bpm";
+        }
+
+        // Schedule the events
+        scheduleMIDIEvents(midiData);
+          })
+          .catch(error => console.error('Error loading MIDI file:', error));
+      }
+    }
+
     function updateSlider_mode(value) {
       if (loader.webAudioWorklet) {
         loader.sendFloatParameterToWorklet("mode", value);
@@ -446,7 +484,7 @@
       });
 
       // Function to parse the MIDI file and schedule events
-      function scheduleMIDIEvents(midi) {
+      window.scheduleMIDIEvents = function(midi) {
         // Clear any previous scheduled parts
         parts.forEach(part => part.dispose());
         parts = [];
