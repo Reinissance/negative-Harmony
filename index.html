@@ -88,11 +88,12 @@
     var player = null;
 
     let loadedChannelInstruments = {}; // Store necessary instruments for midi file playback
-    let drumInstrument = null;
-    let availableInstrumentsForProgramChange = {};
-    let availableDrumSoundsForNote = {};
-    var midiNotes = [];
-    let noMidi = true;
+    let availableInstrumentsForProgramChange = {}; // Strore available instrument soundfonts provided by webaudiofont per program change number
+    let drumInstrument = null; // Create a separate instrument for drum sounds
+    let availableDrumSoundsForNote = {};  // Store available drum sounds per note provided by webaudiofont
+    var midiNotes = []; // Store the notes played by the midi player to stop them on note off
+    let loadedChannelControlValues = {}; // on midiFile load, store the control values for each channel
+    let noMidi = true; // Flag to check if no MIDI devices are available
     
     window.onload = function () {
       heavy_Module().then(loadedModule => {
@@ -123,8 +124,6 @@
           // will be constructed.
           webAudioContext: null
         }).then(() => {
-          // updateSlider_mode(1.0);
-          // updateSlider_negRoot(5.0);
           Tone.start();
           setupGMPlayer();
           var startPrompt = document.getElementById("start_prompt");
@@ -309,6 +308,10 @@
               } else {
                 // console.log("Volume change:", message[2], "on channel:", channel);
                 loadedChannelInstruments[channel].gainNode.gain.value = message[2] / 127;
+                var slider = document.getElementById("volumeSlider_" + channel);
+                slider.value = message[2];
+                var v_label = document.getElementById("vol_label_" + channel);
+                v_label.innerHTML = "Volume: " + (message[2] / 127).toFixed(2);
               }
             } else if (message[1] === 10) {
               // Pan
@@ -318,6 +321,9 @@
               } else {
                 // console.log("Pan change:", message[2], "on channel:", channel);
                 loadedChannelInstruments[channel].panNode.pan.value = (message[2] - 64) / 64;
+                var slider = document.getElementById("panSlider_" + channel);
+                slider.value = (message[2] - 64) / 64;
+                var p_label = document.getElementById("pan_label_" + channel);
               }
             }
           } else if (message[0] >= 0xC0 && message[0] < 0xD0) {
@@ -346,8 +352,6 @@
       }
     }
 
-    // Generated Parameter Update Methods
-
     function sendEvent_allNotesOff() {
       if (loader.webAudioWorklet) {
         loader.sendEvent("allNotesOff");
@@ -355,7 +359,6 @@
         loader.audiolib.sendEvent("allNotesOff");
       }
     }
-
 
     function updateSlider_mode(value) {
       if (loader.webAudioWorklet) {
@@ -389,8 +392,6 @@
     }
 
     function setupMidiPlayer() {
-
-
       // MIDI player code
 
       let midiData;
@@ -400,6 +401,9 @@
 
       // Handle MIDI file upload
       document.getElementById('midiUpload').addEventListener('change', (event) => {
+        
+        cleanup();
+        
         // console.log("Loading MIDI file...");
         const file = event.target.files[0];
         if (file) {
@@ -408,16 +412,20 @@
             // Parse the MIDI file using MidiConvert
             const readMidiFile = MidiConvert.parse(e.target.result);
             midiData = readMidiFile; // Store parsed MIDI data
-            // console.log(midi);
+            console.log(midiData);
+
+            // reset speed and speed slider to 1
+            speedSlider.value = 1;
+            speed = 1;
 
             //Get bpm from midi file if present
             if (readMidiFile.header.bpm) {
               bpm = readMidiFile.header.bpm;
               // console.log("BPM from MIDI file:", bpm);
-              Tone.Transport.bpm.value = (bpm * speed).toFixed(1);
+              Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
               const label = document.querySelector('label[for="speedControl"]');
               if (label) {
-                label.textContent = "Playback Speed: " + (bpm * speed).toFixed(1) + "bpm";
+                label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
               }
             }
             else {
@@ -425,10 +433,6 @@
               Tone.Transport.bpm.value = 120; // Default to 120 bpm
               speedSlider.label = "Speed: 120bpm";
             }
-
-            // reset speed and speed slider to 1
-            speedSlider.value = 1;
-            speed = 1;
 
             // Schedule the events
             scheduleMIDIEvents(midiData);
@@ -450,90 +454,95 @@
         // Loop through each track in the MIDI file
         midi.tracks.forEach((track, trackIndex) => {
           const part = new Tone.Part((time, note) => {
-            // console.log("Playing noteon:", note.midi, "velocity:", Math.floor(note.velocity * 127), "on channel:", note.channel);
             onMIDIMessage({
               data: [0x90 + note.channel, note.midi, Math.floor(Math.pow(note.velocity, 2) * 127)]
             });
-            // after the note duration send the release
             Tone.Transport.scheduleOnce((releaseTime) => {
-              // Log each noteoff event with midinumber, velocity and channel to console
-              // console.log("Playing noteoff:", note.midi, "value:", 0, "on channel:", note.channel);
               onMIDIMessage({
                 data: [0x80 + note.channel, note.midi, 0]
               });
             }, note.time + note.duration);
           }, track.notes.map(note => ({
-            time: note.time,           // MIDI event time
-            midi: note.midi,           // MIDI note number
-            duration: note.duration,   // Note duration
-            velocity: note.velocity,    // Note velocity
-            channel: Math.max(track.channelNumber || 0, 0) // MIDI channel
+            time: note.time,
+            midi: note.midi,
+            duration: note.duration,
+            velocity: note.velocity,
+            channel: track.channelNumber
           })));
+          parts.push(part);
+
           // Schedule control change events
           Object.values(track.controlChanges).forEach(controlChange => {
             controlChange.forEach(cc => {
+              // add the first to loadedChannelControlValues in order to have a starting value for the controls
+              if (!loadedChannelControlValues[track.channelNumber]) {
+                loadedChannelControlValues[track.channelNumber] = {};
+              }
+              if (!loadedChannelControlValues[track.channelNumber][cc.number]) {
+                loadedChannelControlValues[track.channelNumber][cc.number] = cc.value;
+              }
               const cpart = new Tone.Part((time, event) => {
-                // Log each control change event with controller number, value, and channel to console
-                // console.log("Control change:", event.number, "value:", Math.floor(event.value * 127), "on channel:", event.channel);
                 onMIDIMessage({
                   data: [0xB0 + event.channel, event.number, Math.floor(event.value * 127)]
                 });
               }, [{
-                time: cc.time,           // Control change time
-                number: cc.number,       // Control change number
-                value: cc.value,         // Control change value
-                channel: Math.max(track.channelNumber || 0, 0) // MIDI channel
+                time: cc.time,
+                number: cc.number,
+                value: cc.value,
+                channel: track.channelNumber
               }]);
               parts.push(cpart);
-              cpart.start();
             });
           });
 
           // Schedule program change events
           if (track.instrumentNumber !== undefined) {
             const programChange = Math.max(track.instrumentNumber || 0, 0);
-            const channel = Math.max(track.channelNumber || 0, 0);
-            if (track.channelNumber != 9) {
-              loadInstrumentsForProgramChange(channel, programChange); // preload needed instruments
+            const channel = track.channelNumber;
+            if (track.channelNumber != 9 && channel >= 0) {
+              loadInstrumentsForProgramChange(channel, programChange, track.name);
             }
             if (programChange >= 0) {
               const ppart = new Tone.Part((time, event) => {
-                // Log each program change event with program number and channel to console
-                // console.log("Program change:", event.number, "on channel:", event.channel);
                 onMIDIMessage({
                   data: [0xC0 + event.channel, event.number]
                 });
               }, [{
-                time: 0,   // Program change time (assuming it happens at the start)
-                number: programChange, // Program change number
-                channel: Math.max(track.channelNumber || 0, 0) // MIDI channel
+                time: 0,
+                number: programChange,
+                channel: track.channelNumber
               }]);
               parts.push(ppart);
-              ppart.start();
             }
-            //collect notenumbers for drum sounds
             if (track.channelNumber === 9) {
               track.notes.forEach(note => {
                 if (!availableDrumSoundsForNote[note.midi]) {
                   loadDrumSoundForNote(note.midi);
-                  // console.log("Drum sound:", availableDrumSoundsForNote[note.midi]);
                 }
               });
             }
           }
-          parts.push(part);
-          part.start();
         });
+        console.log("ControlValues:", loadedChannelControlValues);
+
+        // Start all parts
+        parts.forEach(part => part.start());
       }
 
-      // Play the MIDI file and send the data to PD patch
+      // Play the MIDI file
       document.getElementById('playMidi').addEventListener('click', () => {
         if (!playing) {
           if (midiData) {
             playBtn.innerText = "Stop Playback";
             playing = true;
             Tone.Transport.start();
+            Tone.Transport.scheduleOnce(() => {
+              playBtn.innerText = "Play MIDI";
+              playing = false;
+              sendEvent_allNotesOff();
+            }, midiData.duration);
           } else {
+            alert("Please load a MIDI file first.");
             console.error("No MIDI file loaded or parsed.");
           }
         } else {
@@ -562,24 +571,24 @@
       const player = new WebAudioFontPlayer();
 
       // Function to load the preset
-      function loadPreset(url) {
+      window.loadPreset = function(url) {
         return new Promise((resolve, reject) => {
           var name = '_tone_'+url.split('/').pop().replace('.js', '');
           player.loader.startLoad(audioContext, url, name);
           // player.loader.waitLoad(function () {
-            console.log('Preset loaded:', name);
+            // console.log('Preset loaded:', name);
             resolve(name);
           // });
         });
       }
 
-      function loadDrumSound(url) {
+      window.loadDrumSound = function(url, index) {
         return new Promise((resolve, reject) => {
           var name = '_drum_'+url;
-          url = "https://surikov.github.io/webaudiofontdata/sound/128"+links.urls[0]+".js"
-          player.loader.startLoad(audioContext, url, name);
+          var domained_url = "https://surikov.github.io/webaudiofontdata/sound/128"+url+".js"
+          player.loader.startLoad(audioContext, domained_url, name);
           // player.loader.waitLoad(function () {
-            console.log('Drum sound loaded:', name);
+            // console.log('Drum sound loaded:', name);
             resolve(name);
           // });
         });
@@ -589,12 +598,20 @@
       window.handleNoteOnForChannel = function(note, velocity, channel) {
         // console.log("Velocity:", velocity, "Channel:", channel, "Note:", note.midi);
         handleNoteOff(channel, note.midi);
-        if (channel === 9) {;
+        if (channel === 9) {
+          if (window[drumInstrument.notes[note.midi]] === undefined) {
+            console.log('Drum sound is still loading:', note.midi, drumInstrument);
+            return;
+          }
           var envelope = player.queueWaveTable(audioContext, drumInstrument.gainNode, window[drumInstrument.notes[note.midi]], 
             audioContext.currentTime, note.midi, 9999, velocity); // Long duration to ensure sustained note
         }
         else {
           var instrument = loadedChannelInstruments[channel];
+          if (instrument.preset === "loading") {
+            // console.log('Instrument is still loading:', channel, instrument);
+            return;
+          }
           var envelope = player.queueWaveTable(audioContext, instrument.gainNode, window[instrument.preset], 
               audioContext.currentTime, note.midi, 9999, velocity); // Long duration to ensure sustained note
         }
@@ -620,7 +637,7 @@
         }
       }
 
-      window.loadInstrumentsForProgramChange = function (channel, programNumber) {
+      window.loadInstrumentsForProgramChange = function (channel, programNumber, name) {
         //preload the instruments for the program change and setup mixer channels
         if (!availableInstrumentsForProgramChange[programNumber]) {
           links = linksForProgramChange(programNumber);
@@ -630,8 +647,12 @@
           loadPreset(instrumentUrl)
             .then((preset) => {
               availableInstrumentsForProgramChange[programNumber].preset = preset; // Ensure preset is set correctly
+              availableInstrumentsForProgramChange[programNumber].usingChannels.push(channel);
               channelInstrument.preset = preset; // Store the loaded preset
               loadedChannelInstruments[channel] = channelInstrument;
+              loadedChannelInstruments[channel].programIndex = 0;
+              //create controls for the channel
+              createControlsForChannel(channel, programNumber, name);
               // console.log('Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments);
             })
             .catch((error) => {
@@ -641,12 +662,14 @@
           if (availableInstrumentsForProgramChange[programNumber].preset === "loading") {
             // console.log('Instrument is already loading:', programNumber, availableInstrumentsForProgramChange[programNumber]);
             setTimeout(() => {
-              loadInstrumentsForProgramChange(channel, programNumber);
+              loadInstrumentsForProgramChange(channel, programNumber, name);
             }, 300);
             return;
           }
           else {
+            availableInstrumentsForProgramChange[programNumber].usingChannels.push(channel);
             loadedChannelInstruments[channel] = createChannelInstrumentForChannel(channel, availableInstrumentsForProgramChange[programNumber].preset);
+            createControlsForChannel(channel, programNumber, name);
           }
         }
       }
@@ -657,11 +680,12 @@
           // console.log('Available drum sounds for note:', availableDrumSoundsForNote[note]);
           const drumSoundUrl = links.urls[0]; // Load the first drum sound for now
           addNoteToDrumInstrument(note, "loading");
-          loadDrumSound(drumSoundUrl)
+          loadDrumSound(drumSoundUrl, 0)
             .then((preset) => {
               availableDrumSoundsForNote[note].preset = preset;
-              addNoteToDrumInstrument(note, availableDrumSoundsForNote[note].preset);
+              addNoteToDrumInstrument(note, preset);
               // console.log('Drum sound loaded and decoded. AVAILABLE:', availableDrumSoundsForNote);
+              createDrumInstrumentControl(note, 0);
             })
             .catch((error) => {
               console.error('Error loading drum sound:', error);
@@ -676,6 +700,7 @@
           }
           else {
             addNoteToDrumInstrument(note, availableDrumSoundsForNote[note].preset);
+            createDrumInstrumentControl(note, 0);
           }
         }
       }
@@ -691,7 +716,7 @@
           drumInstrument = {notes: {}, gainNode: gainNode, panNode: panNode};
         }
         drumInstrument.notes[note] = preset;
-        console.log('Drum instrument:', drumInstrument);
+        // console.log('Drum instrument:', drumInstrument);
       }
 
       function createChannelInstrumentForChannel (channel, preset) {
@@ -701,7 +726,7 @@
         panNode.pan.value = 0;
         gainNode.connect(panNode);
         panNode.connect(audioContext.destination);
-        var channelInstrument = {preset:preset, panNode:panNode, gainNode:gainNode};
+        var channelInstrument = {preset:preset, programIndex:0, panNode:panNode, gainNode:gainNode};
         return channelInstrument;
       }
 
@@ -716,7 +741,7 @@
             filter = i.toString();
         }
         var nn = player.loader.findInstrument(i);
-        availableInstrumentsForProgramChange[i] = {name:player.loader.instrumentInfo(nn).title, urls:player.loader.instrumentKeys().filter(url => url.startsWith(filter)), preset:"loading"};
+        availableInstrumentsForProgramChange[i] = {name:player.loader.instrumentInfo(nn).title, urls:player.loader.instrumentKeys().filter(url => url.startsWith(filter)), preset:"loading", usingChannels:[]};
         return availableInstrumentsForProgramChange[i];
       }
 
@@ -729,14 +754,268 @@
         return availableDrumSoundsForNote[i];
       }
     }
+
+    function cleanup() {
+      var element = document.getElementById("file_controls");
+      for (var i = element.childNodes.length - 1; i >= 0; i--) {
+        element.childNodes[i].remove();
+      }
+      loadedChannelControlValues = {};
+      for (program in availableInstrumentsForProgramChange) {
+        // release the preset for the program change
+        window[availableInstrumentsForProgramChange[program].preset] = null;
+        delete availableInstrumentsForProgramChange[program];
+      }
+      for (note in availableDrumSoundsForNote) {
+        // release the drum sound for the note
+        window[availableDrumSoundsForNote[note].preset] = null;
+        delete availableDrumSoundsForNote[note];
+      }
+    }
+
+    function createControlsForChannel(channel, programNumber, name) {
+      // remove old if present
+      var element = document.getElementById("channel_controls_" + channel);
+      var nextSibling = null
+      if (element) {
+        // get the previous element
+        nextSibling = element.nextElementSibling
+        element.remove();
+      }
+      var controls = document.getElementById("file_controls");
+      var nameHeader = document.createElement("h3");
+      nameHeader.innerHTML = name;
+      var controlDiv = document.createElement("div");
+      controlDiv.id = "channel_controls_" + channel;
+      controlDiv.style = "display: flex; flex-direction: column; margin: 10px;";
+      var label = document.createElement("label");
+      label.innerHTML = "<em>Channel " + channel + " - Program " + programNumber + ":</em> <br>" + availableInstrumentsForProgramChange[programNumber].name;;
+      // create a select element for program change
+      var select = document.createElement("select");
+      select.id = "programChange_" + channel;
+      var i = 0;
+      for (sf2 in availableInstrumentsForProgramChange[programNumber].urls) {
+        var option = document.createElement("option");
+        option.value = i;
+        option.text = availableInstrumentsForProgramChange[programNumber].urls[sf2];
+        select.appendChild(option);
+        i++;
+      }
+      select.selectedIndex = loadedChannelInstruments[channel].programIndex;
+      select.selectedIndex = 0;
+      select.onchange = function() {
+        // var programNumber = select.options[select.selectedIndex].value;
+        availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
+        // if (availableInstrumentsForProgramChange[programNumber].usingChannels.length === 0) {
+          // release the preset for the program change if not used by any channel
+        //   window[availableInstrumentsForProgramChange[programNumber].preset] = null;
+        // }
+        availableInstrumentsForProgramChange[programNumber].preset = "loading";
+        loadedChannelInstruments[channel].preset = "loading";
+        instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
+        // console.log("Loading preset for channel:", channel, "program:", programNumber, "url:", instrumentUrl);
+        loadPreset("https://surikov.github.io/webaudiofontdata/sound/"+instrumentUrl+".js")
+          .then((preset) => {
+            availableInstrumentsForProgramChange[programNumber].preset = preset; // Ensure preset is set correctly
+            loadedChannelInstruments[channel].preset = preset; // Store the loaded preset
+            loadedChannelInstruments[channel].programIndex = select.selectedIndex;
+            //create controls for the channel
+            createControlsForChannel(channel, programNumber, name);
+            channelSelect = document.getElementById("programChange_" + channel);
+            channelSelect.selectedIndex = loadedChannelInstruments[channel].programIndex;
+            // console.log('Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments);
+          })
+          .catch((error) => {
+            console.error('Error loading preset:', error);
+          });
+      };
+      var vol_label = document.createElement("label");
+      vol_label.id = "vol_label_" + channel;
+      vol_label.style = "margin-top: 10px;"; 
+      var volumeSlider = document.createElement("input");
+      volumeSlider.id = "volumeSlider_" + channel;
+      volumeSlider.type = "range";
+      volumeSlider.min = 0;
+      volumeSlider.max = 127;
+      if (channel in loadedChannelControlValues && 7 in loadedChannelControlValues[channel]) {
+        volumeSlider.value = loadedChannelControlValues[channel][7] * 127;
+        vol_label.innerHTML = "Volume: " + (loadedChannelControlValues[channel][7]).toFixed(2);
+      } else {
+        volumeSlider.value = loadedChannelInstruments[channel].gainNode.gain.value * 127;
+        vol_label.innerHTML = "Volume";
+      }
+      volumeSlider.setAttribute('data-channel', channel);
+      volumeSlider.oninput = function(event) {
+        const slider = event.target;
+        var channel = slider.getAttribute('data-channel');
+        loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
+        var v_label = document.getElementById("vol_label_" + channel);
+        v_label.innerHTML = "Volume: " + (slider.value / 127).toFixed(2);
+      };
+      var pan_label = document.createElement("label");
+      pan_label.id = "pan_label_" + channel;
+      var panSlider = document.createElement("input");
+      panSlider.id = "panSlider_" + channel;
+      panSlider.type = "range";
+      panSlider.min = -1;
+      panSlider.max = 1;
+      panSlider.step = 0.01;
+      if (channel in loadedChannelControlValues && 10 in loadedChannelControlValues[channel]) {
+        panSlider.value = loadedChannelControlValues[channel][10] * 2 - 1;
+        pan_label.innerHTML = "Panning: " + parseFloat(panSlider.value).toFixed(2);
+      } else {
+        panSlider.value = loadedChannelInstruments[channel].panNode.pan.value;
+        pan_label.innerHTML = "Panning";
+      }
+      panSlider.setAttribute('data-channel', channel);
+      panSlider.oninput = function(event) {
+        const slider = event.target;
+        var channel = slider.getAttribute('data-channel');
+        loadedChannelInstruments[channel].panNode.pan.value = slider.value;
+        var p_label = document.getElementById("pan_label_" + channel);
+        p_label.innerHTML = "Panning: " + parseFloat(slider.value).toFixed(2);
+      };
+
+      controlDiv.appendChild(nameHeader);
+      controlDiv.appendChild(label);
+      controlDiv.appendChild(select);
+      controlDiv.appendChild(vol_label);
+      controlDiv.appendChild(volumeSlider);
+      controlDiv.appendChild(pan_label);
+      controlDiv.appendChild(panSlider);
+      if (nextSibling) {
+        controls.insertBefore(controlDiv, nextSibling);
+      } else {
+        controls.appendChild(controlDiv);
+      }
+    }
+    
+    function createDrumInstrumentControl(note, sf2Index) {
+      var availableSoundsForNote = availableDrumSoundsForNote[note];
+      var controlDiv = document.getElementById("drum_controls");
+      var noteDivs = document.getElementById("drumNoteDivs");
+      if (!controlDiv) {
+        var controls = document.getElementById("file_controls");
+        var nameHeader = document.createElement("h3");
+        nameHeader.innerHTML = "Drum Instrument";
+        nameHeader.className = "title";
+        controlDiv = document.createElement("div");
+        controlDiv.id = "drum_controls";
+        controlDiv.style = "display: flex; flex-direction: column; margin: 10px; width: 100%;";
+        var vol_label = document.createElement("label");
+        vol_label.id = "vol_label_drum";
+        vol_label.style = "margin-top: 10px;"; 
+        var volumeSlider = document.createElement("input");
+        volumeSlider.id = "volumeSlider_drum";
+        volumeSlider.type = "range";
+        volumeSlider.min = 0;
+        volumeSlider.max = 127;
+        if (9 in loadedChannelControlValues && 7 in loadedChannelControlValues[9]) {
+          volumeSlider.value = loadedChannelControlValues[9][7] * 127;
+          vol_label.innerHTML = "Volume: " + (loadedChannelControlValues[9][7]).toFixed(2);
+        } else {
+          volumeSlider.value = drumInstrument.gainNode.gain.value * 127;
+          vol_label.innerHTML = "Volume";
+        }
+        volumeSlider.oninput = function(event) {
+          const slider = event.target;
+          drumInstrument.gainNode.gain.value = slider.value / 127;
+          var v_label = document.getElementById("vol_label_drum");
+          v_label.innerHTML = "Volume: " + (slider.value / 127).toFixed(2);
+        };
+        var pan_label = document.createElement("label");
+        pan_label.id = "pan_label_drum";
+        var panSlider = document.createElement("input");
+        panSlider.id = "panSlider_drum";
+        panSlider.type = "range";
+        panSlider.min = -1;
+        panSlider.max = 1;
+        panSlider.step = 0.01;
+        if (9 in loadedChannelControlValues && 10 in loadedChannelControlValues[9]) {
+          panSlider.value = loadedChannelControlValues[9][10] * 2 - 1;
+          pan_label.innerHTML = "Panning: " + parseFloat(panSlider.value).toFixed(2);
+        } else {
+          panSlider.value = drumInstrument.panNode.pan.value;
+          pan_label.innerHTML = "Panning";
+        }
+        panSlider.oninput = function(event) {
+          const slider = event.target;
+          drumInstrument.panNode.pan.value = slider.value;
+          var p_label = document.getElementById("pan_label_drum");
+          p_label.innerHTML = "Panning: " + parseFloat(slider.value).toFixed(2);
+        };
+        var noteDivs = document.createElement("div");
+        noteDivs.id = "drumNoteDivs";
+        noteDivs.style = "display: flex; flex-direction: row; flex-wrap: wrap; justify-content: space-between; flex-wrap: wrap;";
+        var noteHeader = document.createElement("h4");
+        noteHeader.innerHTML = "Drum Notes:";
+        noteHeader.className = "title";
+        controlDiv.appendChild(nameHeader);
+        controlDiv.appendChild(vol_label);
+        controlDiv.appendChild(volumeSlider);
+        controlDiv.appendChild(pan_label);
+        controlDiv.appendChild(panSlider);
+        controlDiv.appendChild(noteHeader);
+        controlDiv.appendChild(noteDivs);
+        controls.appendChild(controlDiv);
+      }
+      var noteDiv = document.getElementById("drumNoteDiv"+availableSoundsForNote.name);
+      var nextSibling = null;
+      if (noteDiv) {
+        nextSibling = noteDiv.nextElementSibling;
+        noteDiv.remove();
+      }
+      noteDiv = document.createElement("div");
+      noteDiv.id = "drumNoteDiv"+availableSoundsForNote.name;
+      var noteLabel = document.createElement("label");
+      noteLabel.innerHTML = availableSoundsForNote.name + ": ";
+      var noteSelect = document.createElement("select");
+      noteSelect.id = "drumNoteSelect"+availableSoundsForNote.name;
+      noteSelect.style = "margin-top: 10px;";
+      for (sf2 in availableSoundsForNote.urls) {
+        var option = document.createElement("option");
+        option.value = sf2;
+        option.text = availableSoundsForNote.urls[sf2];
+        noteSelect.appendChild(option);
+      }
+      noteSelect.selectedIndex = sf2Index;
+      noteSelect.onchange = function(event) {
+        // window[availableDrumSoundsForNote[note].preset] = null;
+        availableDrumSoundsForNote[note].preset = "loading";
+        drumInstrument.notes[note] = "loading";
+        var index = event.target.selectedIndex;
+        var drumSoundUrl = availableSoundsForNote.urls[index];
+        console.log("Loading drum sound for note:", note, "url:", drumSoundUrl, "index:", index);
+        loadDrumSound(drumSoundUrl, index)
+          .then((preset) => {
+            availableDrumSoundsForNote[note].preset = preset; // Ensure preset is set correctly
+            drumInstrument.notes[note] = preset; // Store the loaded preset
+            console.log('Drum sound loaded and decoded. AVAILABLE:', availableSoundsForNote, "SELECTED:", preset);
+            createDrumInstrumentControl(note, index);
+            event.target.selectedIndex = index;
+          })
+          .catch((error) => {
+            console.error('Error loading drum sound:', error);
+          });
+      };
+      noteDiv.appendChild(noteLabel);
+      noteDiv.appendChild(noteSelect);
+      if (nextSibling) {
+        noteDivs.insertBefore(noteDiv, nextSibling);
+      } else {
+        noteDivs.appendChild(noteDiv);
+      }
+      controlDiv.appendChild(noteDivs);
+    }
   </script>
 </head>
 
 <body>
   <div class="widget">
-    <div class="row title">
+    <div class="title horizontal">
       <div class="col">
         <h2>negative Harmony</h2>
+        <p><em>Playback MIDI-Files possibly in negative Harmony.</em></p>
       </div>
       <div id="col_transport" class="col transport" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center;">
         <div style="text-align: center;">
@@ -745,6 +1024,32 @@
         start / stop
         <input type="checkbox" id="transportButton" onchange="toggleTransport();">
           </label>
+        </div>
+      </div>
+    </div>
+    <div class="horizontal" style="text-align: center;">
+      <div style="display: flex; flex-direction: column; margin: 10px;">
+        <h3>Midi-Player</h3>
+        <input type="file" id="midiUpload" accept=".mid" style="margin-bottom: 10px;" />
+        <button id="playMidi" style="margin-bottom: 10px;">Play MIDI</button>
+        <!-- Speed control slider (0.5x to 2x) -->
+        <label for="speedControl">Playback Speed: </label>
+        <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
+      </div>
+      <div>
+        <div id="midiIn">
+          <div>MIDI input:</div>
+          <select id="midiInputs" onchange="console.log(this.value)"></select>
+        </div>
+        <div id="midiOut" style="margin-top: 20px;">
+          <div>MIDI output:</div>
+          <select id="midiOutputs" onchange="console.log(this.value)"></select>
+        </div>
+      </div>
+      <div style="text-align: center;">
+        <div class="col events">
+          MIDI Panic:<br>
+          <button type="button" id="trigger_allNotesOff" onclick="sendEvent_allNotesOff();">allNotesOff</button><br>
         </div>
       </div>
     </div>
@@ -808,31 +1113,8 @@
           <input id="parameter_perOktave" type="checkbox" onchange="updateSlider_perOktave(this.checked ? 1.0 : 0.0);">
         </div>
       </div>
-      <div style="text-align: center;">
-        <div class="col events">
-          MIDI Panic:<br>
-          <button type="button" id="trigger_allNotesOff" onclick="sendEvent_allNotesOff();">allNotesOff</button><br>
-        </div>
-      </div>
     </div>
-    <div class="horizontal" style="text-align: center;">
-      <div style="display: flex; flex-direction: column; margin: 10px;">
-        <h3>Midi-Player</h3>
-        <input type="file" id="midiUpload" accept=".mid" style="margin-bottom: 10px;" />
-        <button id="playMidi" style="margin-bottom: 10px;">Play MIDI</button>
-        <!-- Speed control slider (0.5x to 2x) -->
-        <label for="speedControl">Playback Speed: </label>
-        <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
-      </div>
-      <div id="midiIn">
-        <div>MIDI inputs:</div>
-        <select id="midiInputs" onchange="console.log(this.value)"></select>
-      </div>
-      <div id="midiOut">
-        <div>MIDI output:</div>
-        <select id="midiOutputs" onchange="console.log(this.value)"></select>
-      </div>
-    </div>
+    <div id="file_controls" style="display: flex; flex-direction: row; justify-content: space-between; margin: 10px; flex-wrap: wrap;"></div>
     <div class="row">
       <span class="link"><em>powered by <a
             href="https://github.com/Wasted-Audio/hvcc"><strong>heavy</strong></em></a></span>
