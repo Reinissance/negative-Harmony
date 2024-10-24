@@ -132,6 +132,8 @@
           startPrompt.hidden = true;
           var transportButton = document.getElementById("col_transport");
           transportButton.style = "";
+          updateSlider_perOktave(1);
+          updateSlider_mode(2);
 
           checkForLinkedMidiFile();
 
@@ -392,11 +394,20 @@
           Tone.Transport.bpm.value = 120; // Default to 120 bpm
           speedSlider.label = "Speed: 120bpm";
         }
+        if (readMidiFile.header.name) {
+          document.getElementById("midiFileName").innerHTML = readMidiFile.header.name;
+        }
+
+        var fileUpload = document.getElementById("midiUpload");
+        var fileInput = new File([data], midiFileUrl.split('/').pop(), {type: 'audio/midi'});
+        var dataTransfer = new DataTransfer();
+        dataTransfer.items.add(fileInput);
+        fileUpload.files = dataTransfer.files;
 
         // Schedule the events
         scheduleMIDIEvents(midiData);
           })
-          .catch(error => console.error('Error loading MIDI file:', error));
+          .catch(error => alert('Error loading MIDI file:', error.text));
       }
     }
 
@@ -471,6 +482,9 @@
               // console.log("No BPM found in MIDI file. Defaulting to 120 bpm.");
               Tone.Transport.bpm.value = 120; // Default to 120 bpm
               speedSlider.label = "Speed: 120bpm";
+            }
+            if (midiData.header.name) {
+              document.getElementById("midiFileName").innerHTML = readMidiFile.header.name;
             }
 
             // Schedule the events
@@ -561,9 +575,32 @@
               });
             }
           }
+          // Store the last notes played by the midi player to check the piece's key
+          if (track.notes.length > 0 && track.channelNumber != 9) {
+            const lastNote = track.notes[track.notes.length - 1].midi;
+            if (!lastNotes.includes(lastNote)) {
+              lastNotes.push(lastNote);
+            }
+          }
         });
         // console.log("ControlValues:", loadedChannelControlValues);
-        console.log("Last notes played:", lastNotes);
+        // Check the piece's key
+        if (lastNotes.length > 0) {
+          // get the lowest note
+            const lowestNote = Math.min(...lastNotes);
+          // set root input to the lowest note
+          const negRootRadios = document.getElementsByName("negRoot");
+          for (const radio of negRootRadios) {
+            if ((parseFloat(radio.value) + 3) % 12 === (lowestNote + 6) % 12) {
+              radio.checked = true;
+              updateSlider_negRoot(parseFloat(radio.value));
+              break;
+            }
+            else {
+              radio.checked = false;
+            }
+          }
+        }
 
         // Start all parts
         parts.forEach(part => part.start());
@@ -796,6 +833,9 @@
     }
 
     function cleanup() {
+      lastNotes = [];
+      var midiFileName = document.getElementById("midiFileName");
+      midiFileName.innerHTML = "";
       var element = document.getElementById("file_controls");
       for (var i = element.childNodes.length - 1; i >= 0; i--) {
         element.childNodes[i].remove();
@@ -1071,8 +1111,7 @@
       <div style="display: flex; flex-direction: column; margin: 10px;">
         <h3>Midi-Player</h3>
         <input type="file" id="midiUpload" accept=".mid" style="margin-bottom: 10px;" />
-        <button id="playMidi" style="margin-bottom: 10px;">Play MIDI</button>
-        <!-- Speed control slider (0.5x to 2x) -->
+        <button id="playMidi" style="margin-bottom: 10px; color: red; font-weight: bold;">Play MIDI</button>
         <label for="speedControl">Playback Speed: </label>
         <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
       </div>
@@ -1095,13 +1134,13 @@
     </div>
     <div style="display: flex; justify-content: space-around; align-items: center;">
       <div>
-        <h3>Mode:</h3>
+        <h2>Mode:</h2>
         <div>
           <input id="parameter_mode_1" type="radio" name="mode" value="0.0" onchange="updateSlider_mode(value);">
           <label for="parameter_mode_1">normal</label><br>
           <input id="parameter_mode_2" type="radio" name="mode" value="1.0" onchange="updateSlider_mode(value);">
-          <label for="parameter_mode_2">lefthand Piano</label><br>
-          <input id="parameter_mode_3" type="radio" name="mode" value="2.0"  checked
+          <label for="parameter_mode_2" title="Mirrors notes around the axis of the middle D (C Major becomes A minor and vice versa).">lefthand Piano</label><br>
+          <input id="parameter_mode_3" title="Mirrors notes around an axis between the 3rds of the root note (eg. C Major becomes C minor and vice versa)." type="radio" name="mode" value="2.0"  checked
             onchange="updateSlider_mode(value);">
           <label for="parameter_mode_3">negative Harmony</label><br>
         </div>
@@ -1150,10 +1189,12 @@
       <div id="perOkt">
         <h3>perOktave</h3>
         <div class="col parameter-slider">
-          <input id="parameter_perOktave" type="checkbox" onchange="updateSlider_perOktave(this.checked ? 1.0 : 0.0);">
+          <input id="parameter_perOktave" type="checkbox" checked onchange="updateSlider_perOktave(this.checked ? 1.0 : 0.0);">
         </div>
       </div>
     </div>
+    <br>
+    <h1 id="midiFileName" class="title" style="width: 100%;"></h1>
     <div id="file_controls" style="display: flex; flex-direction: row; justify-content: space-between; margin: 10px; flex-wrap: wrap;"></div>
     <div class="row">
       <span class="link"><em>powered by <a
