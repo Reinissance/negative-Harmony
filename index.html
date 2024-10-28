@@ -9,7 +9,7 @@
   <script type="application/javascript" src="./heavy.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js"></script>
   <script src="https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/midiconvert@0.4.7/build/MidiConvert.js"></script>
+  <script src="https://unpkg.com/@tonejs/midi"></script>
 
   <style>
     .horizontal {
@@ -340,6 +340,10 @@
               programNumber = message[1];
               loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[programNumber].preset;
             }
+          } else if (message[0] >= 0xE0 && message[0] < 0xF0) {
+            channel = message[0] & 0x0F;
+            // Pitch bend
+            console.log("Got Pitch bend:", message[1], "on channel:", channel);
           }
         }
         else {
@@ -374,40 +378,19 @@
         fetch(midiFileUrl)
           .then(response => response.arrayBuffer())
           .then(data => {
-        const readMidiFile = MidiConvert.parse(data);
-        midiData = readMidiFile;
-        console.log(midiData);
+            midiData = new Midi(data);
+            parseMidiFile();
 
-        // reset speed and speed slider to 1
-        speedSlider.value = 1;
-        speed = 1;
-
-        // Get bpm from midi file if present
-        if (readMidiFile.header.bpm) {
-          bpm = readMidiFile.header.bpm;
-          Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
-          const label = document.querySelector('label[for="speedControl"]');
-          if (label) {
-            label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
-          }
-        } else {
-          Tone.Transport.bpm.value = 120; // Default to 120 bpm
-          speedSlider.label = "Speed: 120bpm";
-        }
-        if (readMidiFile.header.name) {
-          document.getElementById("midiFileName").innerHTML = readMidiFile.header.name;
-        }
-
-        var fileUpload = document.getElementById("midiUpload");
-        var fileInput = new File([data], midiFileUrl.split('/').pop(), {type: 'audio/midi'});
-        var dataTransfer = new DataTransfer();
-        dataTransfer.items.add(fileInput);
-        fileUpload.files = dataTransfer.files;
-
-        // Schedule the events
-        scheduleMIDIEvents(midiData);
+            var fileUpload = document.getElementById("midiUpload");
+            var fileInput = new File([data], midiFileUrl.split('/').pop(), {type: 'audio/midi'});
+            var dataTransfer = new DataTransfer();
+            dataTransfer.items.add(fileInput);
+            fileUpload.files = dataTransfer.files;
           })
-          .catch(error => alert('Error loading MIDI file:', error.text));
+            .catch(error => {
+            console.log(error);
+            alert('Error loading MIDI file: ' + error);
+            });
       }
     }
 
@@ -442,6 +425,39 @@
       sendEvent_allNotesOff();
     }
 
+    function parseMidiFile() {
+      console.log(midiData);
+
+      // reset speed and speed slider to 1
+      speedSlider.value = 1.0;
+      speed = 1.0;
+
+      const label = document.querySelector('label[for="speedControl"]');
+      //Get bpm from midi file if present
+      if (midiData.header.tempos) {
+        bpm = midiData.header.tempos[0]["bpm"];
+        // console.log("BPM from MIDI file:", bpm);
+        Tone.Transport.bpm.value = (bpm).toFixed(2);
+        if (label) {
+          label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
+        }
+      }
+      else {
+        // console.log("No BPM found in MIDI file. Defaulting to 120 bpm.");
+        Tone.Transport.bpm.value = 120; // Default to 120 bpm
+        speedSlider.label = "Speed: 120bpm";
+        if (label) {
+          label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
+        }
+      }
+      if (midiData.header.name) {
+        document.getElementById("midiFileName").innerHTML = midiData.header.name;
+      }
+
+      // Schedule the events
+      scheduleMIDIEvents(midiData);
+    }
+
     function setupMidiPlayer() {
       // MIDI player code
 
@@ -458,37 +474,10 @@
         const file = event.target.files[0];
         if (file) {
           const reader = new FileReader();
-          reader.onload = function (e) {
-            // Parse the MIDI file using MidiConvert
-            const readMidiFile = MidiConvert.parse(e.target.result);
-            midiData = readMidiFile; // Store parsed MIDI data
-            console.log(midiData);
-
-            // reset speed and speed slider to 1
-            speedSlider.value = 1;
-            speed = 1;
-
-            //Get bpm from midi file if present
-            if (readMidiFile.header.bpm) {
-              bpm = readMidiFile.header.bpm;
-              // console.log("BPM from MIDI file:", bpm);
-              Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
-              const label = document.querySelector('label[for="speedControl"]');
-              if (label) {
-                label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
-              }
-            }
-            else {
-              // console.log("No BPM found in MIDI file. Defaulting to 120 bpm.");
-              Tone.Transport.bpm.value = 120; // Default to 120 bpm
-              speedSlider.label = "Speed: 120bpm";
-            }
-            if (midiData.header.name) {
-              document.getElementById("midiFileName").innerHTML = readMidiFile.header.name;
-            }
-
-            // Schedule the events
-            scheduleMIDIEvents(midiData);
+          reader.onload = async function (e) {
+            const midi = new Midi(e.target.result);
+            midiData = midi; // Store parsed MIDI data
+            parseMidiFile();
           };
           reader.readAsArrayBuffer(file);
           // console.log("MIDI file loaded.");
@@ -504,13 +493,37 @@
         parts.forEach(part => part.dispose());
         parts = [];
 
+        // Schedule tempos from header
+        if (Array.isArray(midi.header.tempos)) {
+          midi.header.tempos.forEach(tempo => {
+            const tempoPart = new Tone.Part((time, event) => {
+              // speedSlider.value = 1.0;
+              // speed = 1.0;
+              Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
+              // console.log("Tempo change:", event.bpm);
+              // set the slider value to the new tempo
+              // for (part of parts) {
+              //   part.playbackRate = 1.0;
+              // }
+              const label = document.querySelector('label[for="speedControl"]');
+              if (label) {
+                label.textContent = "Playback Speed: " + (event.bpm).toFixed(2) + "bpm";
+              }
+            }, [{
+              time: tempo.time,
+              bpm: tempo.bpm
+            }]);
+            parts.push(tempoPart);
+          });
+        }
+
         // Loop through each track in the MIDI file
         midi.tracks.forEach((track, trackIndex) => {
           const part = new Tone.Part((time, note, channel) => {
             onMIDIMessage({
-              data: [0x90 + note.channel, note.midi, Math.floor(Math.pow(note.velocity, 2) * 127)]
+              data: [0x90 + note.channel, note.midi, note.velocity]
             });
-            Tone.Transport.scheduleOnce((releaseTime) => {
+            Tone.Transport.schedule((releaseTime) => {
               onMIDIMessage({
                 data: [0x80 + note.channel, note.midi, 0]
               });
@@ -519,8 +532,8 @@
             time: note.time,
             midi: note.midi,
             duration: note.duration,
-            velocity: note.velocity,
-            channel: track.channelNumber
+            velocity: (track.channel === 9) ? Math.floor(note.velocity * 127) : Math.floor(Math.pow(note.velocity, 2) * 127),
+            channel: track.channel
           })));
           parts.push(part);
 
@@ -528,11 +541,11 @@
           Object.values(track.controlChanges).forEach(controlChange => {
             controlChange.forEach(cc => {
               // add the first to loadedChannelControlValues in order to have a starting value for the controls
-              if (!loadedChannelControlValues[track.channelNumber]) {
-                loadedChannelControlValues[track.channelNumber] = {};
+              if (!loadedChannelControlValues[track.channel]) {
+                loadedChannelControlValues[track.channel] = {};
               }
-              if (!loadedChannelControlValues[track.channelNumber][cc.number]) {
-                loadedChannelControlValues[track.channelNumber][cc.number] = cc.value;
+              if (!loadedChannelControlValues[track.channel][cc.number]) {
+                loadedChannelControlValues[track.channel][cc.number] = cc.value;
               }
               const cpart = new Tone.Part((time, event) => {
                 onMIDIMessage({
@@ -542,17 +555,18 @@
                 time: cc.time,
                 number: cc.number,
                 value: cc.value,
-                channel: track.channelNumber
+                channel: track.channel
               }]);
               parts.push(cpart);
             });
           });
 
           // Schedule program change events
-          if (track.instrumentNumber !== undefined) {
-            const programChange = Math.max(track.instrumentNumber || 0, 0);
-            const channel = track.channelNumber;
-            if (track.channelNumber != 9 && channel >= 0) {
+          if (track.instrument !== undefined) {
+            const programChange = Math.max(track.instrument["number"] || 0, 0);
+            const channel = track.channel;
+            if (track.channel != 9 && channel >= 0) {
+              // preload the instruments for the program change and setup mixer channels
               loadInstrumentsForProgramChange(channel, programChange, track.name);
             }
             if (programChange >= 0) {
@@ -563,25 +577,44 @@
               }, [{
                 time: 0,
                 number: programChange,
-                channel: track.channelNumber
+                channel: track.channel
               }]);
               parts.push(ppart);
             }
-            if (track.channelNumber === 9) {
+            if (track.channel === 9) {
               track.notes.forEach(note => {
                 if (!availableDrumSoundsForNote[note.midi]) {
+                  // preload the drum sounds for each used note
                   loadDrumSoundForNote(note.midi);
                 }
               });
             }
           }
+
+          // Schedule pitch bend events
+          if (track.pitchBends.length > 0) {
+            console.log("Pitch bends found:", track.pitchBends);
+            const bendPart = new Tone.Part((time, event) => {
+              onMIDIMessage({
+                data: [0xE0 + event.channel, event.value & 0x7F, event.value >> 7]
+              });
+              console.log("Sending Pitch bend:", event.value, "on channel:", event.channel);
+            }, track.pitchBends.map(bend => ({
+              time: bend.time,
+              value: (bend.value + 1) * 8192,
+              channel: track.channel
+            })));
+            parts.push(bendPart);
+          }
+
           // Store the last notes played by the midi player to check the piece's key
-          if (track.notes.length > 0 && track.channelNumber != 9) {
+          if (track.notes.length > 0 && track.channel != 9) {
             const lastNote = track.notes[track.notes.length - 1].midi;
             if (!lastNotes.includes(lastNote)) {
               lastNotes.push(lastNote);
             }
           }
+          //end of looping track
         });
         // console.log("ControlValues:", loadedChannelControlValues);
         // Check the piece's key
@@ -616,6 +649,8 @@
             Tone.Transport.scheduleOnce(() => {
               playBtn.innerText = "Play MIDI";
               playing = false;
+              Tone.Transport.stop();
+              Tone.Transport.position = 0; // Reset to the beginning of the file
               sendEvent_allNotesOff();
             }, midiData.duration);
           } else {
@@ -625,7 +660,7 @@
         } else {
           console.log("Stopping playback...");
           Tone.Transport.stop();
-          Tone.Transport.position = 0; // Reset to the beginning of the file
+          Tone.Transport.position = 0;
           playBtn.innerText = "Play MIDI";
           playing = false;
           sendEvent_allNotesOff();
@@ -635,11 +670,14 @@
       // Control playback speed with a range input
       document.getElementById('speedControl').addEventListener('input', function (event) {
         speed = parseFloat(event.target.value);
-        Tone.Transport.bpm.value = (bpm * speed).toFixed(1);
+        Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
         const label = document.querySelector('label[for="speedControl"]');
         if (label) {
-            label.textContent = "Playback Speed: " + (bpm * speed).toFixed(1) + "bpm";
+            label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
         }
+        // parts.forEach(part => {
+        //     part.playbackRate = speed;
+        // });
       });
     }
 
@@ -827,7 +865,7 @@
         var nn = player.loader.findDrum(i);
         info = player.loader.drumInfo(nn);
         availableDrumSoundsForNote[i] = {name:info.title, urls:player.loader.drumKeys().filter(url => url.startsWith(filter)), preset:"loading"};
-        console.log("Drum sound:", i, availableDrumSoundsForNote[i]);
+        // console.log("Drum sound:", i, availableDrumSoundsForNote[i]);
         return availableDrumSoundsForNote[i];
       }
     }
@@ -1065,12 +1103,12 @@
         drumInstrument.notes[note] = "loading";
         var index = event.target.selectedIndex;
         var drumSoundUrl = availableSoundsForNote.urls[index];
-        console.log("Loading drum sound for note:", note, "url:", drumSoundUrl, "index:", index);
+        // console.log("Loading drum sound for note:", note, "url:", drumSoundUrl, "index:", index);
         loadDrumSound(drumSoundUrl, index)
           .then((preset) => {
             availableDrumSoundsForNote[note].preset = preset; // Ensure preset is set correctly
             drumInstrument.notes[note] = preset; // Store the loaded preset
-            console.log('Drum sound loaded and decoded. AVAILABLE:', availableSoundsForNote, "SELECTED:", preset);
+            // console.log('Drum sound loaded and decoded. AVAILABLE:', availableSoundsForNote, "SELECTED:", preset);
             createDrumInstrumentControl(note, index);
             event.target.selectedIndex = index;
           })
