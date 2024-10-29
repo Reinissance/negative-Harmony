@@ -78,24 +78,28 @@
   </style>
 
   <script type="text/javascript">
-    var heavyModule = null;
-    var loader = null;
-    var midioutPort = null;
-    var midiOutputsSelect = null;
-    bpm = 120;
-    var speed = 1.0;
-    var speedSlider = null;
-    var player = null;
+    let heavyModule = null;
+    let loader = null;
+    let midioutPort = null;
+    let midiOutputsSelect = null;
+    let midiInputs = [];
+    let bpm = 120;
+    let speed = 1.0;
+    let speedSlider = null;
+    let player = null;
 
     let loadedChannelInstruments = {}; // Store necessary instruments for midi file playback
-    let availableInstrumentsForProgramChange = {}; // Strore available instrument soundfonts provided by webaudiofont per program change number
+    let availableInstrumentsForProgramChange = {}; // Store available instrument soundfonts provided by webaudiofont per program change number
     let drumInstrument = null; // Create a separate instrument for drum sounds
     let availableDrumSoundsForNote = {};  // Store available drum sounds per note provided by webaudiofont
-    var midiNotes = []; // Store the notes played by the midi player to stop them on note off
+    let midiNotes = []; // Store the notes played by the midi player to stop them on note off
     let loadedChannelControlValues = {}; // on midiFile load, store the control values for each channel
     let noMidi = true; // Flag to check if no MIDI devices are available
     let lastNotes = []; // Store the last notes played by the midi player to check the piece's key
     let midiData;
+    let normal = false;
+    let sustain = {};
+    let sustainedNodes = {};
 
     window.onload = function () {
       heavy_Module().then(loadedModule => {
@@ -162,7 +166,6 @@
     function onMIDISuccess(midiAccess) {
 
       noMidi = false;
-      var midiInputs = [];
       var inputs = midiAccess.inputs.values();
       midiInputs = Array.from(midiAccess.inputs.values());
       var midiInputsSelect = document.getElementById("midiInputs");
@@ -332,7 +335,19 @@
                 slider.value = (message[2] - 64) / 64;
                 var p_label = document.getElementById("pan_label_" + channel);
               }
-            }
+            } else if (message[1] === 64) {
+              // Sustain pedal
+              if (message[2] > 0) {
+                sustain[channel] = true;
+              } else {
+                for (const node of Object.values(sustainedNodes)) {
+                  node.cancel();
+                }
+                sustain[channel] = false;
+                
+              }
+              // console.log("Sustain pedal:", message[2], "on channel:", channel);
+            };
           } else if (message[0] >= 0xC0 && message[0] < 0xD0) {
             // Program change
             // set the instrument for the channel
@@ -391,6 +406,12 @@
             console.log(error);
             alert('Error loading MIDI file: ' + error);
           });
+      } else {
+        console.log("No linked MIDI file found.");
+        if (midiInputs.length > 0) {
+          console.log("loading piano");
+          loadInstrumentsForProgramChange(0, 0, "Piano");
+        }
       }
     }
 
@@ -404,6 +425,7 @@
       negRoots.hidden = (value == 2) ? false : true;
       var perOkt = document.getElementById("perOkt");
       perOkt.hidden = (value == 0) ? true : false;
+      normal = perOkt.hidden;
       sendEvent_allNotesOff();
     }
 
@@ -434,7 +456,7 @@
 
       const label = document.querySelector('label[for="speedControl"]');
       //Get bpm from midi file if present
-      if (midiData.header.tempos) {
+      if (midiData.header.tempos.length > 0) {
         bpm = midiData.header.tempos[0]["bpm"];
         // console.log("BPM from MIDI file:", bpm);
         Tone.Transport.bpm.value = (bpm).toFixed(2);
@@ -507,6 +529,13 @@
               bpm: tempo.bpm
             });
           });
+        }
+
+        // Set timeSignature
+        if (midi.header.timeSignatures.length > 0) {
+          const timeSignature = midi.header.timeSignatures[0];
+          console.log("Time Signature:", timeSignature.timeSignature);
+          Tone.Transport.timeSignature = timeSignature.timeSignature;
         }
 
         // Loop through each track in the MIDI file
@@ -614,10 +643,10 @@
           part.callback = (time, event) => {
             switch (event.type) {
               case 'tempo':
-                Tone.Transport.bpm.value = event.bpm;
+                Tone.Transport.bpm.value = event.bpm * speed;
                 const label = document.querySelector('label[for="speedControl"]');
                 if (label) {
-                  label.textContent = "Playback Speed: " + (event.bpm).toFixed(2) + "bpm";
+                  label.textContent = "Playback Speed: " + (event.bpm * speed).toFixed(2) + "bpm";
                 }
                 break;
               case 'note':
@@ -628,7 +657,7 @@
                   onMIDIMessage({
                     data: [0x80 + event.channel, event.midi, 0]
                   });
-                }, event.length);
+                }, event.length / speed);
                 break;
               case 'controlChange':
                 onMIDIMessage({
@@ -641,6 +670,9 @@
                 });
                 break;
               case 'pitchBend':
+                if (!normal) {
+                  event.value = (event.value - 8192) * -1 + 8192;
+                }
                 onMIDIMessage({
                   data: [0xE0 + event.channel, event.value & 0x7F, event.value >> 7]
                 });
@@ -688,9 +720,6 @@
         if (label) {
           label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
         }
-        // parts.forEach(part => {
-        //     part.playbackRate = speed;
-        // });
       });
     }
 
@@ -710,7 +739,7 @@
         });
       }
 
-      window.loadDrumSound = function (url, index) {
+      window.loadDrumSound = function (url) {
         return new Promise((resolve, reject) => {
           var name = '_drum_' + url;
           var domained_url = "https://surikov.github.io/webaudiofontdata/sound/128" + url + ".js"
@@ -728,7 +757,7 @@
         handleNoteOff(channel, note.midi);
         if (channel === 9) {
           if (window[drumInstrument.notes[note.midi]] === undefined) {
-            console.log('Drum sound is still loading:', note.midi, drumInstrument);
+            // console.log('Drum sound is missing or still loading:', note.midi, drumInstrument);
             return;
           }
           var envelope = player.queueWaveTable(audioContext, drumInstrument.gainNode, window[drumInstrument.notes[note.midi]],
@@ -758,7 +787,11 @@
         midiNotes = midiNotes.filter((midiNote) => {
           if (!noteRemoved && midiNote.pitch === note.midi && midiNote.channel === channel) {
             if (midiNote.envelope) {
-              midiNote.envelope.cancel();
+              if (!sustain[channel]) {
+                midiNote.envelope.cancel();
+              } else {
+                sustainedNodes[note.midi] = midiNote.envelope;
+              }
             }
             noteRemoved = true;
             return false;
@@ -810,7 +843,8 @@
           // console.log('Available drum sounds for note:', availableDrumSoundsForNote[note]);
           const drumSoundUrl = links.urls[0]; // Load the first drum sound for now
           addNoteToDrumInstrument(note, "loading");
-          loadDrumSound(drumSoundUrl, 0)
+          if (drumSoundUrl != undefined) {
+          loadDrumSound(drumSoundUrl)
             .then((preset) => {
               availableDrumSoundsForNote[note].preset = preset;
               addNoteToDrumInstrument(note, preset);
@@ -820,6 +854,9 @@
             .catch((error) => {
               console.error('Error loading drum sound:', error);
             });
+          } else {
+            console.warn("No drum sound URL found for note:", note);
+          } 
         } else {
           if (availableDrumSoundsForNote[note].preset === "loading") {
             // console.log('Drum sound is already loading:', note, availableDrumSoundsForNote[note]);
@@ -907,238 +944,212 @@
     }
 
     function createControlsForChannel(channel, programNumber, name) {
-      // remove old if present
-      var element = document.getElementById("channel_controls_" + channel);
-      var nextSibling = null
-      if (element) {
-        // get the previous element
-        nextSibling = element.nextElementSibling
-        element.remove();
-      }
-      var controls = document.getElementById("file_controls");
-      var nameHeader = document.createElement("h3");
-      nameHeader.innerHTML = name;
-      var controlDiv = document.createElement("div");
+      // Remove old controls if present
+      let element = document.getElementById("channel_controls_" + channel);
+      let nextSibling = element ? element.nextElementSibling : null;
+      if (element) element.remove();
+
+      let controls = document.getElementById("file_controls");
+      let controlDiv = document.createElement("div");
       controlDiv.id = "channel_controls_" + channel;
       controlDiv.style = "display: flex; flex-direction: column; margin: 10px;";
-      var label = document.createElement("label");
-      label.innerHTML = "<em>Channel " + channel + " - Program " + programNumber + ":</em> <br>" + availableInstrumentsForProgramChange[programNumber].name;;
-      // create a select element for program change
-      var select = document.createElement("select");
+
+      let nameHeader = document.createElement("h3");
+      nameHeader.innerHTML = name;
+      controlDiv.appendChild(nameHeader);
+
+      let label = document.createElement("label");
+      label.innerHTML = `<em>Channel ${channel} - Program ${programNumber}:</em> <br>${availableInstrumentsForProgramChange[programNumber].name}`;
+      controlDiv.appendChild(label);
+
+      // Create a select element for program change
+      let select = document.createElement("select");
       select.id = "programChange_" + channel;
-      var i = 0;
-      for (sf2 in availableInstrumentsForProgramChange[programNumber].urls) {
-        var option = document.createElement("option");
-        option.value = i;
-        option.text = availableInstrumentsForProgramChange[programNumber].urls[sf2];
-        select.appendChild(option);
-        i++;
-      }
+      availableInstrumentsForProgramChange[programNumber].urls.forEach((url, i) => {
+      let option = document.createElement("option");
+      option.value = i;
+      option.text = url;
+      select.appendChild(option);
+      });
       select.selectedIndex = loadedChannelInstruments[channel].programIndex;
-      select.selectedIndex = 0;
       select.onchange = function () {
-        // var programNumber = select.options[select.selectedIndex].value;
-        availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
-        // if (availableInstrumentsForProgramChange[programNumber].usingChannels.length === 0) {
-        // release the preset for the program change if not used by any channel
-        //   window[availableInstrumentsForProgramChange[programNumber].preset] = null;
-        // }
-        availableInstrumentsForProgramChange[programNumber].preset = "loading";
-        loadedChannelInstruments[channel].preset = "loading";
-        instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
-        // console.log("Loading preset for channel:", channel, "program:", programNumber, "url:", instrumentUrl);
-        loadPreset("https://surikov.github.io/webaudiofontdata/sound/" + instrumentUrl + ".js")
-          .then((preset) => {
-            availableInstrumentsForProgramChange[programNumber].preset = preset; // Ensure preset is set correctly
-            loadedChannelInstruments[channel].preset = preset; // Store the loaded preset
-            loadedChannelInstruments[channel].programIndex = select.selectedIndex;
-            //create controls for the channel
-            createControlsForChannel(channel, programNumber, name);
-            channelSelect = document.getElementById("programChange_" + channel);
-            channelSelect.selectedIndex = loadedChannelInstruments[channel].programIndex;
-            // console.log('Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments);
-          })
-          .catch((error) => {
-            console.error('Error loading preset:', error);
-          });
+      availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
+      availableInstrumentsForProgramChange[programNumber].preset = "loading";
+      loadedChannelInstruments[channel].preset = "loading";
+      let instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
+      loadPreset("https://surikov.github.io/webaudiofontdata/sound/" + instrumentUrl + ".js")
+        .then((preset) => {
+        availableInstrumentsForProgramChange[programNumber].preset = preset;
+        loadedChannelInstruments[channel].preset = preset;
+        loadedChannelInstruments[channel].programIndex = select.selectedIndex;
+        createControlsForChannel(channel, programNumber, name);
+        document.getElementById("programChange_" + channel).selectedIndex = loadedChannelInstruments[channel].programIndex;
+        })
+        .catch((error) => console.error('Error loading preset:', error));
       };
-      var vol_label = document.createElement("label");
+      controlDiv.appendChild(select);
+
+      // Volume control
+      let vol_label = document.createElement("label");
       vol_label.id = "vol_label_" + channel;
       vol_label.style = "margin-top: 10px;";
-      var volumeSlider = document.createElement("input");
+      let volumeSlider = document.createElement("input");
       volumeSlider.id = "volumeSlider_" + channel;
       volumeSlider.type = "range";
       volumeSlider.min = 0;
       volumeSlider.max = 127;
-      if (channel in loadedChannelControlValues && 7 in loadedChannelControlValues[channel]) {
-        volumeSlider.value = loadedChannelControlValues[channel][7] * 127;
-        vol_label.innerHTML = "Volume: " + (loadedChannelControlValues[channel][7]).toFixed(2);
-      } else {
-        volumeSlider.value = loadedChannelInstruments[channel].gainNode.gain.value * 127;
-        vol_label.innerHTML = "Volume";
-      }
+      volumeSlider.value = (channel in loadedChannelControlValues && 7 in loadedChannelControlValues[channel])
+      ? loadedChannelControlValues[channel][7] * 127
+      : loadedChannelInstruments[channel].gainNode.gain.value * 127;
+      vol_label.innerHTML = `Volume: ${(volumeSlider.value / 127).toFixed(2)}`;
       volumeSlider.setAttribute('data-channel', channel);
       volumeSlider.oninput = function (event) {
-        const slider = event.target;
-        var channel = slider.getAttribute('data-channel');
-        loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
-        var v_label = document.getElementById("vol_label_" + channel);
-        v_label.innerHTML = "Volume: " + (slider.value / 127).toFixed(2);
+      let slider = event.target;
+      let channel = slider.getAttribute('data-channel');
+      loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
+      document.getElementById("vol_label_" + channel).innerHTML = `Volume: ${(slider.value / 127).toFixed(2)}`;
       };
-      var pan_label = document.createElement("label");
+      controlDiv.appendChild(vol_label);
+      controlDiv.appendChild(volumeSlider);
+
+      // Pan control
+      let pan_label = document.createElement("label");
       pan_label.id = "pan_label_" + channel;
-      var panSlider = document.createElement("input");
+      let panSlider = document.createElement("input");
       panSlider.id = "panSlider_" + channel;
       panSlider.type = "range";
       panSlider.min = -1;
       panSlider.max = 1;
       panSlider.step = 0.01;
-      if (channel in loadedChannelControlValues && 10 in loadedChannelControlValues[channel]) {
-        panSlider.value = loadedChannelControlValues[channel][10] * 2 - 1;
-        pan_label.innerHTML = "Panning: " + parseFloat(panSlider.value).toFixed(2);
-      } else {
-        panSlider.value = loadedChannelInstruments[channel].panNode.pan.value;
-        pan_label.innerHTML = "Panning";
-      }
+      panSlider.value = (channel in loadedChannelControlValues && 10 in loadedChannelControlValues[channel])
+      ? loadedChannelControlValues[channel][10] * 2 - 1
+      : loadedChannelInstruments[channel].panNode.pan.value;
+      pan_label.innerHTML = `Panning: ${parseFloat(panSlider.value).toFixed(2)}`;
       panSlider.setAttribute('data-channel', channel);
       panSlider.oninput = function (event) {
-        const slider = event.target;
-        var channel = slider.getAttribute('data-channel');
-        loadedChannelInstruments[channel].panNode.pan.value = slider.value;
-        var p_label = document.getElementById("pan_label_" + channel);
-        p_label.innerHTML = "Panning: " + parseFloat(slider.value).toFixed(2);
+      let slider = event.target;
+      let channel = slider.getAttribute('data-channel');
+      loadedChannelInstruments[channel].panNode.pan.value = slider.value;
+      document.getElementById("pan_label_" + channel).innerHTML = `Panning: ${parseFloat(slider.value).toFixed(2)}`;
       };
-
-      controlDiv.appendChild(nameHeader);
-      controlDiv.appendChild(label);
-      controlDiv.appendChild(select);
-      controlDiv.appendChild(vol_label);
-      controlDiv.appendChild(volumeSlider);
       controlDiv.appendChild(pan_label);
       controlDiv.appendChild(panSlider);
+
       if (nextSibling) {
-        controls.insertBefore(controlDiv, nextSibling);
+      controls.insertBefore(controlDiv, nextSibling);
       } else {
-        controls.appendChild(controlDiv);
+      controls.appendChild(controlDiv);
       }
     }
 
     function createDrumInstrumentControl(note, sf2Index) {
-      var availableSoundsForNote = availableDrumSoundsForNote[note];
-      var controlDiv = document.getElementById("drum_controls");
-      var noteDivs = document.getElementById("drumNoteDivs");
+      let availableSoundsForNote = availableDrumSoundsForNote[note];
+      let controlDiv = document.getElementById("drum_controls");
+      let noteDivs = document.getElementById("drumNoteDivs");
       if (!controlDiv) {
-        var controls = document.getElementById("file_controls");
-        var nameHeader = document.createElement("h3");
-        nameHeader.innerHTML = "Drum Instrument";
-        nameHeader.className = "title";
-        controlDiv = document.createElement("div");
-        controlDiv.id = "drum_controls";
-        controlDiv.style = "display: flex; flex-direction: column; margin: 10px; width: 100%;";
-        var vol_label = document.createElement("label");
-        vol_label.id = "vol_label_drum";
-        vol_label.style = "margin-top: 10px;";
-        var volumeSlider = document.createElement("input");
-        volumeSlider.id = "volumeSlider_drum";
-        volumeSlider.type = "range";
-        volumeSlider.min = 0;
-        volumeSlider.max = 127;
-        if (9 in loadedChannelControlValues && 7 in loadedChannelControlValues[9]) {
-          volumeSlider.value = loadedChannelControlValues[9][7] * 127;
-          vol_label.innerHTML = "Volume: " + (loadedChannelControlValues[9][7]).toFixed(2);
-        } else {
-          volumeSlider.value = drumInstrument.gainNode.gain.value * 127;
-          vol_label.innerHTML = "Volume";
-        }
-        volumeSlider.oninput = function (event) {
-          const slider = event.target;
-          drumInstrument.gainNode.gain.value = slider.value / 127;
-          var v_label = document.getElementById("vol_label_drum");
-          v_label.innerHTML = "Volume: " + (slider.value / 127).toFixed(2);
-        };
-        var pan_label = document.createElement("label");
-        pan_label.id = "pan_label_drum";
-        var panSlider = document.createElement("input");
-        panSlider.id = "panSlider_drum";
-        panSlider.type = "range";
-        panSlider.min = -1;
-        panSlider.max = 1;
-        panSlider.step = 0.01;
-        if (9 in loadedChannelControlValues && 10 in loadedChannelControlValues[9]) {
-          panSlider.value = loadedChannelControlValues[9][10] * 2 - 1;
-          pan_label.innerHTML = "Panning: " + parseFloat(panSlider.value).toFixed(2);
-        } else {
-          panSlider.value = drumInstrument.panNode.pan.value;
-          pan_label.innerHTML = "Panning";
-        }
-        panSlider.oninput = function (event) {
-          const slider = event.target;
-          drumInstrument.panNode.pan.value = slider.value;
-          var p_label = document.getElementById("pan_label_drum");
-          p_label.innerHTML = "Panning: " + parseFloat(slider.value).toFixed(2);
-        };
-        var noteDivs = document.createElement("div");
-        noteDivs.id = "drumNoteDivs";
-        noteDivs.style = "display: flex; flex-direction: row; flex-wrap: wrap; justify-content: space-between; flex-wrap: wrap;";
-        var noteHeader = document.createElement("h4");
-        noteHeader.innerHTML = "Drum Notes:";
-        noteHeader.className = "title";
-        controlDiv.appendChild(nameHeader);
-        controlDiv.appendChild(vol_label);
-        controlDiv.appendChild(volumeSlider);
-        controlDiv.appendChild(pan_label);
-        controlDiv.appendChild(panSlider);
-        controlDiv.appendChild(noteHeader);
-        controlDiv.appendChild(noteDivs);
-        controls.appendChild(controlDiv);
+      let controls = document.getElementById("file_controls");
+      controlDiv = document.createElement("div");
+      controlDiv.id = "drum_controls";
+      controlDiv.style = "display: flex; flex-direction: column; margin: 10px; width: 100%;";
+
+      let nameHeader = document.createElement("h3");
+      nameHeader.innerHTML = "Drum Instrument";
+      nameHeader.className = "title";
+      controlDiv.appendChild(nameHeader);
+
+      let vol_label = document.createElement("label");
+      vol_label.id = "vol_label_drum";
+      vol_label.style = "margin-top: 10px;";
+      let volumeSlider = document.createElement("input");
+      volumeSlider.id = "volumeSlider_drum";
+      volumeSlider.type = "range";
+      volumeSlider.min = 0;
+      volumeSlider.max = 127;
+      volumeSlider.value = (9 in loadedChannelControlValues && 7 in loadedChannelControlValues[9])
+        ? loadedChannelControlValues[9][7] * 127
+        : drumInstrument.gainNode.gain.value * 127;
+      vol_label.innerHTML = `Volume: ${(volumeSlider.value / 127).toFixed(2)}`;
+      volumeSlider.oninput = function (event) {
+        drumInstrument.gainNode.gain.value = event.target.value / 127;
+        document.getElementById("vol_label_drum").innerHTML = `Volume: ${(event.target.value / 127).toFixed(2)}`;
+      };
+      controlDiv.appendChild(vol_label);
+      controlDiv.appendChild(volumeSlider);
+
+      let pan_label = document.createElement("label");
+      pan_label.id = "pan_label_drum";
+      let panSlider = document.createElement("input");
+      panSlider.id = "panSlider_drum";
+      panSlider.type = "range";
+      panSlider.min = -1;
+      panSlider.max = 1;
+      panSlider.step = 0.01;
+      panSlider.value = (9 in loadedChannelControlValues && 10 in loadedChannelControlValues[9])
+        ? loadedChannelControlValues[9][10] * 2 - 1
+        : drumInstrument.panNode.pan.value;
+      pan_label.innerHTML = `Panning: ${parseFloat(panSlider.value).toFixed(2)}`;
+      panSlider.oninput = function (event) {
+        drumInstrument.panNode.pan.value = event.target.value;
+        document.getElementById("pan_label_drum").innerHTML = `Panning: ${parseFloat(event.target.value).toFixed(2)}`;
+      };
+      controlDiv.appendChild(pan_label);
+      controlDiv.appendChild(panSlider);
+
+      let noteHeader = document.createElement("h4");
+      noteHeader.innerHTML = "Drum Notes:";
+      noteHeader.className = "title";
+      controlDiv.appendChild(noteHeader);
+
+      noteDivs = document.createElement("div");
+      noteDivs.id = "drumNoteDivs";
+      noteDivs.style = "display: flex; flex-direction: row; flex-wrap: wrap; justify-content: space-between;";
+      controlDiv.appendChild(noteDivs);
+
+      controls.appendChild(controlDiv);
       }
-      var noteDiv = document.getElementById("drumNoteDiv" + availableSoundsForNote.name);
-      var nextSibling = null;
-      if (noteDiv) {
-        nextSibling = noteDiv.nextElementSibling;
-        noteDiv.remove();
-      }
+
+      let noteDiv = document.getElementById("drumNoteDiv" + availableSoundsForNote.name);
+      let nextSibling = noteDiv ? noteDiv.nextElementSibling : null;
+      if (noteDiv) noteDiv.remove();
+
       noteDiv = document.createElement("div");
       noteDiv.id = "drumNoteDiv" + availableSoundsForNote.name;
-      var noteLabel = document.createElement("label");
-      noteLabel.innerHTML = availableSoundsForNote.name + ": ";
-      var noteSelect = document.createElement("select");
+
+      let noteLabel = document.createElement("label");
+      noteLabel.innerHTML = `${availableSoundsForNote.name}: `;
+      noteDiv.appendChild(noteLabel);
+
+      let noteSelect = document.createElement("select");
       noteSelect.id = "drumNoteSelect" + availableSoundsForNote.name;
       noteSelect.style = "margin-top: 10px;";
-      for (sf2 in availableSoundsForNote.urls) {
-        var option = document.createElement("option");
-        option.value = sf2;
-        option.text = availableSoundsForNote.urls[sf2];
-        noteSelect.appendChild(option);
-      }
+      availableSoundsForNote.urls.forEach((url, i) => {
+      let option = document.createElement("option");
+      option.value = i;
+      option.text = url;
+      noteSelect.appendChild(option);
+      });
       noteSelect.selectedIndex = sf2Index;
       noteSelect.onchange = function (event) {
-        // window[availableDrumSoundsForNote[note].preset] = null;
-        availableDrumSoundsForNote[note].preset = "loading";
-        drumInstrument.notes[note] = "loading";
-        var index = event.target.selectedIndex;
-        var drumSoundUrl = availableSoundsForNote.urls[index];
-        // console.log("Loading drum sound for note:", note, "url:", drumSoundUrl, "index:", index);
-        loadDrumSound(drumSoundUrl, index)
-          .then((preset) => {
-            availableDrumSoundsForNote[note].preset = preset; // Ensure preset is set correctly
-            drumInstrument.notes[note] = preset; // Store the loaded preset
-            // console.log('Drum sound loaded and decoded. AVAILABLE:', availableSoundsForNote, "SELECTED:", preset);
-            createDrumInstrumentControl(note, index);
-            event.target.selectedIndex = index;
-          })
-          .catch((error) => {
-            console.error('Error loading drum sound:', error);
-          });
+      availableDrumSoundsForNote[note].preset = "loading";
+      drumInstrument.notes[note] = "loading";
+      let index = event.target.selectedIndex;
+      let drumSoundUrl = availableSoundsForNote.urls[index];
+      loadDrumSound(drumSoundUrl)
+        .then((preset) => {
+        availableDrumSoundsForNote[note].preset = preset;
+        drumInstrument.notes[note] = preset;
+        createDrumInstrumentControl(note, index);
+        event.target.selectedIndex = index;
+        })
+        .catch((error) => console.error('Error loading drum sound:', error));
       };
-      noteDiv.appendChild(noteLabel);
       noteDiv.appendChild(noteSelect);
+
       if (nextSibling) {
-        noteDivs.insertBefore(noteDiv, nextSibling);
+      noteDivs.insertBefore(noteDiv, nextSibling);
       } else {
-        noteDivs.appendChild(noteDiv);
+      noteDivs.appendChild(noteDiv);
       }
-      controlDiv.appendChild(noteDivs);
     }
   </script>
 </head>
