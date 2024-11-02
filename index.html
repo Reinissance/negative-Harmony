@@ -400,11 +400,9 @@
             midiData = new Midi(data);
             parseMidiFile();
 
-            var fileUpload = document.getElementById("midiUpload");
-            var fileInput = new File([data], midiFileUrl.split('/').pop(), { type: 'audio/midi' });
-            var dataTransfer = new DataTransfer();
-            dataTransfer.items.add(fileInput);
-            fileUpload.files = dataTransfer.files;
+            // paste the midi file url into the input field
+            document.getElementById("midiUrl").value = midiFileUrl;
+            
           })
           .catch(error => {
             console.log(error);
@@ -482,6 +480,13 @@
 
       // Schedule the events
       scheduleMIDIEvents(midiData);
+    }
+
+    function reloadPageWithUrl() {
+      const url = document.getElementById("midiUrl").value;
+      if (url) {
+        window.location.href = window.location.pathname + "?midiFile=" + encodeURIComponent(url);
+      }
     }
 
     function setupMidiPlayer() {
@@ -742,6 +747,30 @@
     function setupGMPlayer() {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const player = new WebAudioFontPlayer();
+      // Create a reverb node
+      // Create a convolution reverb node for better quality reverb
+      const reverb = audioContext.createConvolver();
+      const reverbGain = audioContext.createGain();
+      reverbGain.gain.value = 0.5; // Adjust the reverb gain as needed
+      reverb.connect(reverbGain);
+      reverbGain.connect(audioContext.destination);
+
+      // Load an impulse response for the convolution reverb
+      fetch('479080__allistersandwich__cathedral_saint_pierre.wav')
+        .then(response => response.arrayBuffer())
+        .then(data => audioContext.decodeAudioData(data))
+        .then(buffer => {
+          reverb.buffer = buffer;
+        })
+        .catch(error => console.error('Error loading impulse response:', error));
+
+      function createReverbSendGainNode() {
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = 0.3;
+        gainNode.connect(reverb);
+        return gainNode;
+      }
+
 
       // Function to load the preset
       window.loadPreset = function (url) {
@@ -909,7 +938,12 @@
         panNode.pan.value = 0;
         gainNode.connect(panNode);
         panNode.connect(audioContext.destination);
-        var channelInstrument = { preset: preset, programIndex: 0, panNode: panNode, gainNode: gainNode };
+
+        // Create and connect reverb send gain node
+        const reverbSendGainNode = createReverbSendGainNode(channel);
+        panNode.connect(reverbSendGainNode);
+
+        var channelInstrument = { preset: preset, programIndex: 0, panNode: panNode, gainNode: gainNode, reverbSendGainNode: reverbSendGainNode };
         return channelInstrument;
       }
 
@@ -960,103 +994,125 @@
     }
 
     function createControlsForChannel(channel, programNumber, name) {
-      // Remove old controls if present
-      let element = document.getElementById("channel_controls_" + channel);
-      let nextSibling = element ? element.nextElementSibling : null;
-      if (element) element.remove();
+        // Remove old controls if present
+        let element = document.getElementById("channel_controls_" + channel);
+        let nextSibling = element ? element.nextElementSibling : null;
+        if (element) element.remove();
 
-      let controls = document.getElementById("file_controls");
-      let controlDiv = document.createElement("div");
-      controlDiv.id = "channel_controls_" + channel;
-      controlDiv.style = "display: flex; flex-direction: column; margin: 10px;";
+        let controls = document.getElementById("file_controls");
+        let controlDiv = document.createElement("div");
+        controlDiv.id = "channel_controls_" + channel;
+        controlDiv.style = "display: flex; flex-direction: column; margin: 10px;";
 
-      let nameHeader = document.createElement("h3");
-      nameHeader.innerHTML = name;
-      controlDiv.appendChild(nameHeader);
+        let nameHeader = document.createElement("h3");
+        nameHeader.innerHTML = name;
+        controlDiv.appendChild(nameHeader);
 
-      let label = document.createElement("label");
-      label.innerHTML = `<em>Channel ${channel} - Program ${programNumber}:</em> <br>${availableInstrumentsForProgramChange[programNumber].name}`;
-      controlDiv.appendChild(label);
+        let label = document.createElement("label");
+        label.innerHTML = `<em>Channel ${channel} - Program ${programNumber}:</em> <br>${availableInstrumentsForProgramChange[programNumber].name}`;
+        controlDiv.appendChild(label);
 
-      // Create a select element for program change
-      let select = document.createElement("select");
-      select.id = "programChange_" + channel;
-      availableInstrumentsForProgramChange[programNumber].urls.forEach((url, i) => {
-      let option = document.createElement("option");
-      option.value = i;
-      option.text = url;
-      select.appendChild(option);
-      });
-      select.selectedIndex = loadedChannelInstruments[channel].programIndex;
-      select.onchange = function () {
-      availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
-      availableInstrumentsForProgramChange[programNumber].preset = "loading";
-      loadedChannelInstruments[channel].preset = "loading";
-      let instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
-      loadPreset("https://surikov.github.io/webaudiofontdata/sound/" + instrumentUrl + ".js")
+        // Create a select element for program change
+        let select = document.createElement("select");
+        select.id = "programChange_" + channel;
+        availableInstrumentsForProgramChange[programNumber].urls.forEach((url, i) => {
+          let option = document.createElement("option");
+          option.value = i;
+          option.text = url;
+          select.appendChild(option);
+        });
+        select.selectedIndex = loadedChannelInstruments[channel].programIndex;
+        select.onchange = function () {
+          availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
+          availableInstrumentsForProgramChange[programNumber].preset = "loading";
+          loadedChannelInstruments[channel].preset = "loading";
+          let instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
+          loadPreset("https://surikov.github.io/webaudiofontdata/sound/" + instrumentUrl + ".js")
         .then((preset) => {
-        availableInstrumentsForProgramChange[programNumber].preset = preset;
-        loadedChannelInstruments[channel].preset = preset;
-        loadedChannelInstruments[channel].programIndex = select.selectedIndex;
-        createControlsForChannel(channel, programNumber, name);
-        document.getElementById("programChange_" + channel).selectedIndex = loadedChannelInstruments[channel].programIndex;
+          availableInstrumentsForProgramChange[programNumber].preset = preset;
+          loadedChannelInstruments[channel].preset = preset;
+          loadedChannelInstruments[channel].programIndex = select.selectedIndex;
+          createControlsForChannel(channel, programNumber, name);
+          document.getElementById("programChange_" + channel).selectedIndex = loadedChannelInstruments[channel].programIndex;
         })
         .catch((error) => console.error('Error loading preset:', error));
-      };
-      controlDiv.appendChild(select);
+        };
+        controlDiv.appendChild(select);
 
-      // Volume control
-      let vol_label = document.createElement("label");
-      vol_label.id = "vol_label_" + channel;
-      vol_label.style = "margin-top: 10px;";
-      let volumeSlider = document.createElement("input");
-      volumeSlider.id = "volumeSlider_" + channel;
-      volumeSlider.type = "range";
-      volumeSlider.min = 0;
-      volumeSlider.max = 127;
-      volumeSlider.value = (channel in loadedChannelControlValues && 7 in loadedChannelControlValues[channel])
-      ? loadedChannelControlValues[channel][7] * 127
-      : loadedChannelInstruments[channel].gainNode.gain.value * 127;
-      vol_label.innerHTML = `Volume: ${(volumeSlider.value / 127).toFixed(2)}`;
-      volumeSlider.setAttribute('data-channel', channel);
-      volumeSlider.oninput = function (event) {
-      let slider = event.target;
-      let channel = slider.getAttribute('data-channel');
-      loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
-      document.getElementById("vol_label_" + channel).innerHTML = `Volume: ${(slider.value / 127).toFixed(2)}`;
-      };
-      controlDiv.appendChild(vol_label);
-      controlDiv.appendChild(volumeSlider);
+        // Volume control
+        let vol_label = document.createElement("label");
+        vol_label.id = "vol_label_" + channel;
+        vol_label.style = "margin-top: 10px;";
+        let volumeSlider = document.createElement("input");
+        volumeSlider.id = "volumeSlider_" + channel;
+        volumeSlider.type = "range";
+        volumeSlider.min = 0;
+        volumeSlider.max = 127;
+        volumeSlider.value = (channel in loadedChannelControlValues && 7 in loadedChannelControlValues[channel])
+          ? loadedChannelControlValues[channel][7] * 127
+          : loadedChannelInstruments[channel].gainNode.gain.value * 127;
+        vol_label.innerHTML = `Volume: ${(volumeSlider.value / 127).toFixed(2)}`;
+        volumeSlider.setAttribute('data-channel', channel);
+        volumeSlider.oninput = function (event) {
+          let slider = event.target;
+          let channel = slider.getAttribute('data-channel');
+          loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
+          document.getElementById("vol_label_" + channel).innerHTML = `Volume: ${(slider.value / 127).toFixed(2)}`;
+        };
+        controlDiv.appendChild(vol_label);
+        controlDiv.appendChild(volumeSlider);
 
-      // Pan control
-      let pan_label = document.createElement("label");
-      pan_label.id = "pan_label_" + channel;
-      let panSlider = document.createElement("input");
-      panSlider.id = "panSlider_" + channel;
-      panSlider.type = "range";
-      panSlider.min = -1;
-      panSlider.max = 1;
-      panSlider.step = 0.01;
-      panSlider.value = (channel in loadedChannelControlValues && 10 in loadedChannelControlValues[channel])
-      ? loadedChannelControlValues[channel][10] * 2 - 1
-      : loadedChannelInstruments[channel].panNode.pan.value;
-      pan_label.innerHTML = `Panning: ${parseFloat(panSlider.value).toFixed(2)}`;
-      panSlider.setAttribute('data-channel', channel);
-      panSlider.oninput = function (event) {
-      let slider = event.target;
-      let channel = slider.getAttribute('data-channel');
-      loadedChannelInstruments[channel].panNode.pan.value = slider.value;
-      document.getElementById("pan_label_" + channel).innerHTML = `Panning: ${parseFloat(slider.value).toFixed(2)}`;
-      };
-      controlDiv.appendChild(pan_label);
-      controlDiv.appendChild(panSlider);
+        // Pan control
+        let pan_label = document.createElement("label");
+        pan_label.id = "pan_label_" + channel;
+        let panSlider = document.createElement("input");
+        panSlider.id = "panSlider_" + channel;
+        panSlider.type = "range";
+        panSlider.min = -1;
+        panSlider.max = 1;
+        panSlider.step = 0.01;
+        panSlider.value = (channel in loadedChannelControlValues && 10 in loadedChannelControlValues[channel])
+          ? loadedChannelControlValues[channel][10] * 2 - 1
+          : loadedChannelInstruments[channel].panNode.pan.value;
+        pan_label.innerHTML = `Panning: ${parseFloat(panSlider.value).toFixed(2)}`;
+        panSlider.setAttribute('data-channel', channel);
+        panSlider.oninput = function (event) {
+          let slider = event.target;
+          let channel = slider.getAttribute('data-channel');
+          loadedChannelInstruments[channel].panNode.pan.value = slider.value;
+          document.getElementById("pan_label_" + channel).innerHTML = `Panning: ${parseFloat(slider.value).toFixed(2)}`;
+        };
+        controlDiv.appendChild(pan_label);
+        controlDiv.appendChild(panSlider);
 
-      if (nextSibling) {
-      controls.insertBefore(controlDiv, nextSibling);
-      } else {
-      controls.appendChild(controlDiv);
+        // Reverb send control
+        let reverb_label = document.createElement("label");
+        reverb_label.id = "reverb_label_" + channel;
+        reverb_label.style = "margin-top: 10px;";
+        let reverbSlider = document.createElement("input");
+        reverbSlider.id = "reverbSlider_" + channel;
+        reverbSlider.type = "range";
+        reverbSlider.min = 0;
+        reverbSlider.max = 1;
+        reverbSlider.step = 0.01;
+        reverbSlider.value = loadedChannelInstruments[channel].reverbSendGainNode.gain.value;
+        reverb_label.innerHTML = `Reverb Send: ${parseFloat(reverbSlider.value).toFixed(2)}`;
+        reverbSlider.setAttribute('data-channel', channel);
+        reverbSlider.oninput = function (event) {
+          let slider = event.target;
+          let channel = slider.getAttribute('data-channel');
+          loadedChannelInstruments[channel].reverbSendGainNode.gain.value = slider.value;
+          document.getElementById("reverb_label_" + channel).innerHTML = `Reverb Send: ${parseFloat(slider.value).toFixed(2)}`;
+        };
+        controlDiv.appendChild(reverb_label);
+        controlDiv.appendChild(reverbSlider);
+
+        if (nextSibling) {
+          controls.insertBefore(controlDiv, nextSibling);
+        } else {
+          controls.appendChild(controlDiv);
+        }
       }
-    }
 
     function createDrumInstrumentControl(note, sf2Index) {
       let availableSoundsForNote = availableDrumSoundsForNote[note];
@@ -1191,7 +1247,10 @@
     <div class="horizontal" style="text-align: center;">
       <div style="display: flex; flex-direction: column; margin: 10px;">
         <h3>Midi-Player</h3>
+        <p><em>Upload a local file:</em></p>
         <input type="file" id="midiUpload" accept=".mid" style="margin-bottom: 10px;" />
+        <p><em>...or try to paste an url here:<br>(e.g. from <a href="https://bitmidi.com/" target="_blank">https://bitmidi.com/</a>,<br>hit enter to submit.)</em></p>
+        <input type="text" id="midiUrl" style="margin-bottom: 10px;" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadPageWithUrl()"/>
         <button id="playMidi" style="margin-bottom: 10px; color: red; font-weight: bold;">Play MIDI</button>
         <label for="speedControl">Playback Speed: </label>
         <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
