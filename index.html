@@ -633,7 +633,10 @@
         playBtn.disabled = true;
         // hide share button
         document.getElementById("hiddenShareButton").style.display = "none";
-        document.getElementById("st-1").style.display = "none";
+        const shares = document.getElementById("st-1")
+        if (shares) {
+          shares.style.display = "none";
+        }
 
         cleanup();
 
@@ -1178,8 +1181,10 @@
         console.error('Failed to copy share URL: ', err);
       });
       // console.log("SHARE:",shareUrl);
-      hiddenShareButtons = document.getElementById("st-1");
-      hiddenShareButtons.style.display = "block";
+      const shares = document.getElementById("st-1")
+      if (shares) {
+        shares.style.display = "block";
+      }
     }
 
     function updateUserSettings(key, value, channel) {
@@ -1189,7 +1194,10 @@
         userSettings.channels[channel] = userSettings.channels[channel] || {};
         userSettings.channels[channel][key] = value;
       }
-      document.getElementById("st-1").style.display = "none"; // hide share buttons to have always the actual settings in url by forcing user to click share button again
+        const shares = document.getElementById("st-1")
+        if (shares) {
+          shares.style.display = "none";
+        } // hide share buttons to have always the actual settings in url by forcing user to click share button again
       // console.log("User settings updated:", userSettings);
     }
 
