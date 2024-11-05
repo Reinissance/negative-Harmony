@@ -10,6 +10,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js"></script>
   <script src="https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js"></script>
   <script src="https://unpkg.com/@tonejs/midi"></script>
+  <script type="text/javascript" src="https://platform-api.sharethis.com/js/sharethis.js#property=6728d12ef1a61800125d5177&product=sticky-share-buttons&source=platform" async="async"></script>
 
   <style>
     .horizontal {
@@ -100,6 +101,7 @@
     let normal = false;
     let sustain = {};
     let sustainedNodes = {};
+    let userSettings = {"channels":{}};
 
     window.onload = function () {
       heavy_Module().then(loadedModule => {
@@ -117,6 +119,11 @@
     }
 
     function start() {
+      // make playbutton unrespondable
+      var playBtn = document.getElementById('playMidi');
+      playBtn.innerText = "Loading MIDI file...";
+      playBtn.style.color = "gray";
+      playBtn.disabled = true;
       if (!loader.webAudioContext) {
         loader.init({
           // optional: set audio processing block size, default is 2048
@@ -139,7 +146,8 @@
           updateSlider_perOktave(1);
           updateSlider_mode(2);
 
-          checkForLinkedMidiFile();
+          checkForParamsInUrl();
+
 
         });
       }
@@ -256,7 +264,7 @@
 
     function onMIDIFailure(msg) {
       var midiIn = document.getElementById("midiIn");
-      midiIn.innerHTML = "No MIDI available.";
+      midiIn.innerHTML = "No extern MIDI available.";
       midiOut = document.getElementById("midiOut");
       midiOut.innerHTML = "";
       console.error(`Failed to get MIDI access - ${msg}`);
@@ -312,33 +320,40 @@
             } else if (message[1] === 7) {
               // Volume
               // console.log("Volume change:", message[2], "on channel:", channel);
-              if (channel === 9) {
-                drumInstrument.gainNode.gain.value = message[2] / 127;
-                // console.log("Volume change:", message[2], "on DRUMchannel");
-              } else {
-                // console.log("Volume change:", message[2], "on channel:", channel);
-                loadedChannelInstruments[channel].gainNode.gain.value = message[2] / 127;
-                Tone.Draw.schedule(function(time){
-                  var slider = document.getElementById("volumeSlider_" + channel);
-                  slider.value = message[2];
-                  var v_label = document.getElementById("vol_label_" + channel);
-                  v_label.innerHTML = "Volume: " + (message[2] / 127).toFixed(2);
-                }, "+0.1");
-              }
+              Tone.Draw.schedule(function(time){
+                var slider = document.getElementById("volumeSlider_" + ((channel != 9) ? channel : "drum"));
+                if (slider === null || userSettings[channel] === undefined || userSettings[channel][slider.id] === undefined) {
+                    return; // override by shared url settings
+                  }
+                if (channel === 9) {
+                  drumInstrument.gainNode.gain.value = message[2] / 127;
+                  // console.log("Volume change:", message[2], "on DRUMchannel");
+                } else {
+                  // console.log("Volume change:", message[2], "on channel:", channel);
+                  loadedChannelInstruments[channel].gainNode.gain.value = message[2] / 127;
+                }
+                slider.value = message[2];
+                var v_label = document.getElementById("vol_label_" + channel);
+                v_label.innerHTML = "Volume: " + (message[2] / 127).toFixed(2);
+              }, "+0.1");
             } else if (message[1] === 10) {
               // Pan
-              if (channel === 9) {
-                drumInstrument.panNode.pan.value = (message[2] - 64) / 64;
-                // console.log("Pan change:", message[2], "on DRUMchannel");
-              } else {
-                // console.log("Pan change:", message[2], "on channel:", channel);
-                loadedChannelInstruments[channel].panNode.pan.value = (message[2] - 64) / 64;
-                Tone.Draw.schedule(function(time){
-                  var slider = document.getElementById("panSlider_" + channel);
-                  slider.value = (message[2] - 64) / 64;
-                  var p_label = document.getElementById("pan_label_" + channel);
-                }, "+0.1");
-              }
+              Tone.Draw.schedule(function(time){
+                var slider = document.getElementById("panSlider_" + (channel != 9) ? channel : "drum");
+                if (slider === null || userSettings[channel] === undefined || userSettings[channel][slider.id] === undefined) {
+                  return; // override by shared url settings
+                }
+                if (channel === 9) {
+                  drumInstrument.panNode.pan.value = (message[2] - 64) / 64;
+                  // console.log("Pan change:", message[2], "on DRUMchannel");
+                } else {
+                  // console.log("Pan change:", message[2], "on channel:", channel);
+                  loadedChannelInstruments[channel].panNode.pan.value = (message[2] - 64) / 64;
+                };
+                slider.value = (message[2] - 64) / 64;
+                var p_label = document.getElementById("pan_label_" + channel);
+                p_label.innerHTML = "Panning: " + ((message[2] - 64) / 64).toFixed(2);
+              }, "+0.1");
             } else if (message[1] === 64) {
               // Sustain pedal
               if (message[2] > 0) {
@@ -351,6 +366,12 @@
                 
               }
               // console.log("Sustain pedal:", message[2], "on channel:", channel);
+            } else if (message[1] === 91) {
+              // Reverb send
+              if (channel != 9) {
+                loadedChannelInstruments[channel].reverbSendGainNode.gain.value = message[2] / 127;
+                // console.log("Reverb send change:", message[2], "on channel:", channel);
+              }
             };
           } else if (message[0] >= 0xC0 && message[0] < 0xD0) {
             // Program change
@@ -390,8 +411,57 @@
       }
     }
 
-    function checkForLinkedMidiFile() {
+    function checkForParamsInUrl() {
       const urlParams = new URLSearchParams(window.location.search);
+      var playBtn = document.getElementById('playMidi');
+      console.log("URL params:", urlParams);
+      const modeParam = urlParams.get('mode');
+      if (modeParam) {
+        updateSlider_mode(parseInt(modeParam));
+        // set the mode radio button
+        const modeRadios = document.getElementsByName("mode");
+        for (const radio of modeRadios) {
+          if (parseInt(radio.value) === parseInt(modeParam)) {
+            radio.checked = true;
+          } else {
+            radio.checked = false;
+          }
+        }
+      }
+      const negRootParam = urlParams.get('negRoot');
+      if (negRootParam) {
+        updateSlider_negRoot(parseFloat(negRootParam));
+        const negRootRadios = document.getElementsByName("negRoot");
+        for (const radio of negRootRadios) {
+          if (radio.value === negRootParam) {
+            radio.checked = true;
+          } else {
+            radio.checked = false;
+          }
+        }
+      }
+      const perOktaveParam = urlParams.get('perOktave');
+      if (perOktaveParam) {
+        updateSlider_perOktave(parseFloat(perOktaveParam));
+        updateUserSettings("perOktave", perOktaveParam, -1);
+        oktCheck = document.getElementById("parameter_perOktave");
+        oktCheck.checked = (parseFloat(perOktaveParam) == 1.0) ? true : false;
+      }
+      const irUrlParam = urlParams.get('irUrl');
+      if (irUrlParam) {
+        var index = parseInt(irUrlParam);
+        // update Select
+        var reverbSelect = document.getElementById("reverbSelect");
+        setIR(reverbSelect.options[index].value);
+        reverbSelect.selectedIndex = index;
+      }
+      const reverbGainParam = urlParams.get('reverbGain');
+      if (reverbGainParam) {
+        revSlider = document.getElementById("reverbVolume");
+        revSlider.value = parseFloat(reverbGainParam);
+        setReverbGain(parseFloat(reverbGainParam));
+
+      }
       const midiFileUrl = urlParams.get('midiFile');
       if (midiFileUrl) {
         fetch(midiFileUrl)
@@ -402,14 +472,67 @@
 
             // paste the midi file url into the input field
             document.getElementById("midiUrl").value = midiFileUrl;
+
+            // make share button visible
+            document.getElementById("hiddenShareButton").style.display = "block";
             
+            const channelsParam = urlParams.get('channels');
+            const speedParam = urlParams.get('speed');
+
+            if (channelsParam || speedParam) {
+              setTimeout(() => {
+                // check for channels in the url
+                if (channelsParam) {
+                  userSettings.channels = JSON.parse(decodeURIComponent(channelsParam));
+                  // loop through the channels and set the values
+                  for (const channel in userSettings.channels) {
+                    const channelSettings = userSettings.channels[channel];
+                    for (setting in channelSettings) {
+                      const value = channelSettings[setting];
+                      // console.log("Setting channel:", channel, "setting:", setting, "value:", value);
+                      element = document.getElementById(setting);
+                      if (element && element.tagName === 'INPUT' && element.type === 'range') {
+                        element.value = value;
+                        element.dispatchEvent(new Event('input'));
+                      }
+                      else if (element && element.tagName === 'SELECT') {
+                        element.selectedIndex = value;
+                        element.dispatchEvent(new Event('change'));
+                      }
+                    }
+                  }
+                  if (speedParam) {
+                    updateUserSettings("speed", speedParam, -1);
+                    speed = parseFloat(userSettings.speed);
+                    speedSlider.value = speed;
+                    const label = document.querySelector('label[for="speedControl"]');
+                    const speedBPM = (bpm * speed).toFixed(2);
+                    console.log("BPM from MIDI file:", bpm, "SPEED:", speed, "RESULT:", speedBPM);
+                    Tone.Transport.bpm.value = speedBPM;
+                    if (label) {
+                      label.textContent = "Playback Speed: " + speedBPM + "bpm";
+                    }
+                  }
+                  playBtn.disabled = false;
+                  playBtn.innerText = "Play MIDI";
+                  playBtn.style.color = "red";
+                }
+              }, 300);
+            } else {
+              playBtn.disabled = false;
+              playBtn.innerText = "Play MIDI";
+              playBtn.style.color = "red";
+            }
           })
           .catch(error => {
             console.log(error);
             alert('Error loading MIDI file: ' + error);
           });
       } else {
-        console.log("No linked MIDI file found.");
+        playBtn.disabled = false;
+        playBtn.innerText = "Play MIDI";
+        playBtn.style.color = "red";
+        // console.log("No linked MIDI file found.");
         if (midiInputs.length > 0) {
           console.log("loading piano");
           loadInstrumentsForProgramChange(0, 0, "Piano");
@@ -429,6 +552,7 @@
       perOkt.hidden = (value == 0) ? true : false;
       normal = perOkt.hidden;
       sendEvent_allNotesOff();
+      updateUserSettings("mode", value, -1);
     }
 
     function updateSlider_negRoot(value) {
@@ -438,6 +562,7 @@
         loader.audiolib.setFloatParameter("negRoot", value);
       }
       sendEvent_allNotesOff();
+      updateUserSettings("negRoot", value, -1);
     }
 
     function updateSlider_perOktave(value) {
@@ -447,12 +572,13 @@
         loader.audiolib.setFloatParameter("perOktave", value);
       }
       sendEvent_allNotesOff();
+      updateUserSettings("perOktave", value, -1);
     }
 
     function parseMidiFile() {
       console.log(midiData);
 
-      // reset speed and speed slider to 1
+        // reset speed and speed slider to 1
       speedSlider.value = 1.0;
       speed = 1.0;
 
@@ -460,10 +586,11 @@
       //Get bpm from midi file if present
       if (midiData.header.tempos.length > 0) {
         bpm = midiData.header.tempos[0]["bpm"];
-        // console.log("BPM from MIDI file:", bpm);
-        Tone.Transport.bpm.value = (bpm).toFixed(2);
+        const speedBPM = (bpm * speed).toFixed(2);
+        // console.log("BPM from MIDI file:", bpm, "SPEED:", speed, "RESULT:", speedBPM);
+        Tone.Transport.bpm.value = speedBPM;
         if (label) {
-          label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
+          label.textContent = "Playback Speed: " + speedBPM + "bpm";
         }
       }
       else {
@@ -485,7 +612,8 @@
     function reloadPageWithUrl() {
       const url = document.getElementById("midiUrl").value;
       if (url) {
-        window.location.href = window.location.pathname + "?midiFile=" + encodeURIComponent(url);
+        let newUrl = window.location.pathname + "?midiFile=" + encodeURIComponent(url);
+        window.location.href = newUrl;
       }
     }
 
@@ -503,6 +631,9 @@
         playBtn.innerText = "Loading MIDI file...";
         playBtn.style.color = "gray";
         playBtn.disabled = true;
+        // hide share button
+        document.getElementById("hiddenShareButton").style.display = "none";
+        document.getElementById("st-1").style.display = "none";
 
         cleanup();
 
@@ -510,9 +641,10 @@
         const file = event.target.files[0];
         if (file) {
           const reader = new FileReader();
-          reader.onload = async function (e) {
+          reader.onload = function (e) {
             const midi = new Midi(e.target.result);
             midiData = midi; // Store parsed MIDI data
+            userSettings = {"channels":{}}; // Reset user settings
             parseMidiFile();
             playBtn.disabled = false;
             playBtn.innerText = "Play MIDI";
@@ -557,6 +689,11 @@
 
         // Loop through each track in the MIDI file
         midi.tracks.forEach((track, trackIndex) => {
+          // exclude empty tracks
+          if (track.notes.length === 0 && Object.keys(track.controlChanges).length === 0 && track.pitchBends.length === 0) {
+            return;
+          }
+
           const channel = track.channel;
           if (!channelParts[channel]) {
             channelParts[channel] = new Tone.Part();
@@ -628,11 +765,13 @@
             });
           }
 
-          // Store the last notes played by the midi player to check the piece's key
-          if (track.notes.length > 0 && channel != 9) {
-            const lastNote = track.notes[track.notes.length - 1].midi;
-            if (!lastNotes.includes(lastNote)) {
-              lastNotes.push(lastNote);
+          if (userSettings.negRoot === undefined) {
+            // Store the last notes played by the midi player to check the piece's key
+            if (track.notes.length > 0 && channel != 9) {
+              const lastNote = track.notes[track.notes.length - 1].midi;
+              if (!lastNotes.includes(lastNote)) {
+                lastNotes.push(lastNote);
+              }
             }
           }
           //end of looping track
@@ -720,7 +859,7 @@
               sendEvent_allNotesOff();
             }, midiData.duration);
           } else {
-            alert("Please load a MIDI file first.");
+            alert("Please upload a MIDI file or paste a url to a file first.");
             console.error("No MIDI file loaded or parsed.");
           }
         } else {
@@ -729,7 +868,9 @@
           Tone.Transport.position = 0;
           playBtn.innerText = "Play MIDI";
           playing = false;
-          sendEvent_allNotesOff();
+          setTimeout(() => {
+            sendEvent_allNotesOff(); // sometimes some notes are hanging after transport stop
+          }, 300);
         }
       });
 
@@ -741,6 +882,7 @@
         if (label) {
           label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
         }
+        updateUserSettings("speed", speed, -1);
       });
     }
 
@@ -755,18 +897,10 @@
       reverb.connect(reverbGain);
       reverbGain.connect(audioContext.destination);
 
-      // Load an impulse response for the convolution reverb
-      fetch('479080__allistersandwich__cathedral_saint_pierre.wav')
-        .then(response => response.arrayBuffer())
-        .then(data => audioContext.decodeAudioData(data))
-        .then(buffer => {
-          reverb.buffer = buffer;
-        })
-        .catch(error => console.error('Error loading impulse response:', error));
 
       function createReverbSendGainNode() {
         const gainNode = audioContext.createGain();
-        gainNode.gain.value = 0.3;
+        gainNode.gain.value = 0.7;
         gainNode.connect(reverb);
         return gainNode;
       }
@@ -802,9 +936,10 @@
         handleNoteOff(channel, note.midi);
         if (channel === 9) {
           if (window[drumInstrument.notes[note.midi]] === undefined) {
-            // console.log('Drum sound is missing or still loading:', note.midi, drumInstrument);
+            console.log('Drum sound is missing or still loading:', note.midi, drumInstrument);
             return;
           }
+          // console.log('Drum sound:', drumInstrument.notes[note.midi]);
           var envelope = player.queueWaveTable(audioContext, drumInstrument.gainNode, window[drumInstrument.notes[note.midi]],
             audioContext.currentTime, note.midi, 9999, velocity); // Long duration to ensure sustained note
         }
@@ -970,9 +1105,80 @@
         // console.log("Drum sound:", i, availableDrumSoundsForNote[i]);
         return availableDrumSoundsForNote[i];
       }
+
+      window.setIR = function(irUrl) {
+        fetch("IRs/" + irUrl + ".wav")
+          .then(response => response.arrayBuffer())
+          .then(data => audioContext.decodeAudioData(data))
+          .then(buffer => {
+            reverb.buffer = buffer;
+            const reverbSelect = document.getElementById("reverbSelect");
+            updateUserSettings("irUrl", reverbSelect.selectedIndex, -1);
+          })
+          .catch(error => console.error('Error loading impulse response:', error));
+      }
+
+      // Load an impulse response for the convolution reverb
+      setIR('182806__unfa__ir-02-gunshot-in-a-chapel-mixed');
+
+      window.setReverbGain = function(value) {
+        reverbGain.gain.value = value;
+        updateUserSettings("reverbGain", value, -1);
+        // update the label
+        var revLabel = document.querySelector('label[for="reverbVolume"]');
+        revLabel.innerHTML = "Reverb Volume: " + parseFloat(value).toFixed(2);
+      }
+    }
+
+    // Function to generate URL with query parameters
+    function generateShareUrl(baseUrl, params) {
+      const url = new URL(baseUrl);
+      Object.keys(params).forEach(key => {
+        if (typeof params[key] === 'object') {
+          url.searchParams.append(key, encodeURIComponent(JSON.stringify(params[key])));
+        } else {
+          url.searchParams.append(key, params[key]);
+        }
+      });
+      return url.toString();
+    }
+
+    // Function to update ShareThis URL
+    function updateShareUrl(shareUrl) {
+      const shareButtons = document.querySelectorAll('.sharethis-inline-share-buttons');
+      shareButtons.forEach(button => {
+        button.setAttribute('data-url', shareUrl);
+      });
+    }
+
+    window.share = function() {
+      const url = document.getElementById("midiUrl").value;
+      const baseUrl = window.location.href.split('?')[0] + "?midiFile=" + encodeURIComponent(url); // Base URL without query parameters
+      const shareUrl = generateShareUrl(baseUrl, userSettings);
+      updateShareUrl(shareUrl);
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        alert('Share URL copied to clipboard!');
+      }).catch(err => {
+        console.error('Failed to copy share URL: ', err);
+      });
+      // console.log("SHARE:",shareUrl);
+      hiddenShareButtons = document.getElementById("st-1");
+      hiddenShareButtons.style.display = "block";
+    }
+
+    function updateUserSettings(key, value, channel) {
+      if (channel === -1) {
+        userSettings[key] = value;
+      } else {
+        userSettings.channels[channel] = userSettings.channels[channel] || {};
+        userSettings.channels[channel][key] = value;
+      }
+      document.getElementById("st-1").style.display = "none"; // hide share buttons to have always the actual settings in url by forcing user to click share button again
+      // console.log("User settings updated:", userSettings);
     }
 
     function cleanup() {
+      userSettings = {"channels":{}};
       lastNotes = [];
       var midiFileName = document.getElementById("midiFileName");
       midiFileName.innerHTML = "";
@@ -1028,13 +1234,14 @@
           loadedChannelInstruments[channel].preset = "loading";
           let instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
           loadPreset("https://surikov.github.io/webaudiofontdata/sound/" + instrumentUrl + ".js")
-        .then((preset) => {
-          availableInstrumentsForProgramChange[programNumber].preset = preset;
-          loadedChannelInstruments[channel].preset = preset;
-          loadedChannelInstruments[channel].programIndex = select.selectedIndex;
-          createControlsForChannel(channel, programNumber, name);
-          document.getElementById("programChange_" + channel).selectedIndex = loadedChannelInstruments[channel].programIndex;
-        })
+          .then((preset) => {
+            availableInstrumentsForProgramChange[programNumber].preset = preset;
+            loadedChannelInstruments[channel].preset = preset;
+            loadedChannelInstruments[channel].programIndex = select.selectedIndex;
+            createControlsForChannel(channel, programNumber, name);
+            document.getElementById("programChange_" + channel).selectedIndex = loadedChannelInstruments[channel].programIndex;
+            updateUserSettings(select.id, select.value, channel);
+          })
         .catch((error) => console.error('Error loading preset:', error));
         };
         controlDiv.appendChild(select);
@@ -1058,6 +1265,7 @@
           let channel = slider.getAttribute('data-channel');
           loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
           document.getElementById("vol_label_" + channel).innerHTML = `Volume: ${(slider.value / 127).toFixed(2)}`;
+          updateUserSettings(slider.id, slider.value, channel);
         };
         controlDiv.appendChild(vol_label);
         controlDiv.appendChild(volumeSlider);
@@ -1081,6 +1289,7 @@
           let channel = slider.getAttribute('data-channel');
           loadedChannelInstruments[channel].panNode.pan.value = slider.value;
           document.getElementById("pan_label_" + channel).innerHTML = `Panning: ${parseFloat(slider.value).toFixed(2)}`;
+          updateUserSettings(slider.id, slider.value, channel);
         };
         controlDiv.appendChild(pan_label);
         controlDiv.appendChild(panSlider);
@@ -1103,6 +1312,7 @@
           let channel = slider.getAttribute('data-channel');
           loadedChannelInstruments[channel].reverbSendGainNode.gain.value = slider.value;
           document.getElementById("reverb_label_" + channel).innerHTML = `Reverb Send: ${parseFloat(slider.value).toFixed(2)}`;
+          updateUserSettings(slider.id, slider.value, channel);
         };
         controlDiv.appendChild(reverb_label);
         controlDiv.appendChild(reverbSlider);
@@ -1144,6 +1354,7 @@
       volumeSlider.oninput = function (event) {
         drumInstrument.gainNode.gain.value = event.target.value / 127;
         document.getElementById("vol_label_drum").innerHTML = `Volume: ${(event.target.value / 127).toFixed(2)}`;
+        updateUserSettings(event.target.id, event.target.value, channel);
       };
       controlDiv.appendChild(vol_label);
       controlDiv.appendChild(volumeSlider);
@@ -1163,6 +1374,7 @@
       panSlider.oninput = function (event) {
         drumInstrument.panNode.pan.value = event.target.value;
         document.getElementById("pan_label_drum").innerHTML = `Panning: ${parseFloat(event.target.value).toFixed(2)}`;
+          updateUserSettings(event.target.id, event.target.value, channel);
       };
       controlDiv.appendChild(pan_label);
       controlDiv.appendChild(panSlider);
@@ -1245,6 +1457,8 @@
       </div>
     </div>
     <div class="horizontal" style="text-align: center;">
+      <div class="sharethis-sticky-share-buttons" style="display: none;"></div>
+      <a style="display: none;" href="javascript:void(0);" onclick="share();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
       <div style="display: flex; flex-direction: column; margin: 10px;">
         <h3>Midi-Player</h3>
         <p><em>Upload a local file:</em></p>
@@ -1337,13 +1551,28 @@
         </div>
       </div>
     </div>
+    <div class="horizontal" style="margin: 20px;">
+      <div>
+      <label for="reverbSelect">Reverb: </label>
+      <select id="reverbSelect" onchange="setIR(this.value);">
+        <option value="182806__unfa__ir-02-gunshot-in-a-chapel-mixed">Chapel</option>
+        <option value="192228__ligidium__shower-clap-open">Shower</option>
+        <option value="463610__greybrother01__winter-forest-01">Winterforest</option>
+        <option value="479080__allistersandwich__cathedral_saint_pierre">Cathedral</option>
+      </select>
+      </div>
+      <div>
+        <label for="reverbVolume">Reverb Volume: </label>
+        <input type="range" id="reverbVolume" min="0.0" max="1.5" step="0.01" value="0.5" oninput="setReverbGain(this.value);" />
+      </div>
+    </div>
     <br>
     <h1 id="midiFileName" class="title" style="width: 100%;"></h1>
     <div id="file_controls"
       style="display: flex; flex-direction: row; justify-content: space-between; margin: 10px; flex-wrap: wrap;"></div>
     <div class="row">
       <span class="link"><em>powered by <a
-            href="https://github.com/Wasted-Audio/hvcc"><strong>heavy</strong></em></a></span>
+            href="https://github.com/Wasted-Audio/hvcc" target="_blank"><strong>heavy,</strong></a> <a href="https://tonejs.github.io/" target="_blank"><strong>Tone.js</strong></a> and <a href="https://github.com/surikov/webaudiofont" target="_blank"><strong>WebAudioFont</strong></a></em></span>
     </div>
   </div>
 </body>
