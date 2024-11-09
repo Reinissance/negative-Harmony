@@ -508,21 +508,33 @@
                 if (channelsParam) {
                   userSettings.channels = JSON.parse(decodeURIComponent(channelsParam));
                   // loop through the channels and set the values
+
+                  //This is DIRTY: setting Instrument and sfIndex redraws the controls!
                   for (const channel in userSettings.channels) {
                     const channelSettings = userSettings.channels[channel];
                     for (setting in channelSettings) {
+                      // First set the select elements
                       const value = channelSettings[setting];
                       // console.log("Setting channel:", channel, "setting:", setting, "value:", value);
-                      element = document.getElementById(setting);
-                      if (element && element.tagName === 'INPUT' && element.type === 'range') {
-                        element.value = value;
-                        element.dispatchEvent(new Event('input'));
-                      }
-                      else if (element && element.tagName === 'SELECT') {
+                      var element = document.getElementById(setting);
+                      if (element && element.tagName === 'SELECT') {
                         element.selectedIndex = value;
                         element.dispatchEvent(new Event('change'));
+                        delete channelSettings[setting];
                       }
                     }
+                    setTimeout(() => {
+                      // Now set the sliders
+                      for (setting in channelSettings) {
+                        const value = channelSettings[setting];
+                        console.log("Setting channel:", channel, "setting:", setting, "value:", value);
+                        var element = document.getElementById(setting);
+                        if (element && element.tagName === 'INPUT' && element.type === 'range') {
+                          element.value = value;
+                          element.dispatchEvent(new Event('input'));
+                        }
+                      }
+                    }, 500);
                   }
                   if (speedParam) {
                     updateUserSettings("speed", speedParam, -1);
