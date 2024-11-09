@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8">
-  <title>heavy</title>
+  <title>negative Harmony</title>
 
   <!-- Generated javascript library includes -->
   <script type="application/javascript" src="./heavy.js"></script>
@@ -335,7 +335,7 @@
                 slider.value = message[2];
                 var v_label = document.getElementById("vol_label_" + channel);
                 v_label.innerHTML = "Volume: " + (message[2] / 127).toFixed(2);
-              }, "+0.1");
+              }, Tone.now());
             } else if (message[1] === 10) {
               // Pan
               Tone.Draw.schedule(function(time){
@@ -353,7 +353,7 @@
                 slider.value = (message[2] - 64) / 64;
                 var p_label = document.getElementById("pan_label_" + channel);
                 p_label.innerHTML = "Panning: " + ((message[2] - 64) / 64).toFixed(2);
-              }, "+0.1");
+              }, Tone.now());
             } else if (message[1] === 64) {
               // Sustain pedal
               if (message[2] > 0) {
@@ -368,18 +368,41 @@
               // console.log("Sustain pedal:", message[2], "on channel:", channel);
             } else if (message[1] === 91) {
               // Reverb send
-              if (channel != 9) {
-                loadedChannelInstruments[channel].reverbSendGainNode.gain.value = message[2] / 127;
+              Tone.Draw.schedule(function(time){
+                var slider = document.getElementById("reverbSlider_" + (channel != 9) ? channel : "drum");
+                if (slider === null || userSettings[channel] === undefined || userSettings[channel][slider.id] === undefined) {
+                  return; // override by shared url settings
+                }
+                if (channel === 9) {
+                  // no reverb on drum channel yet
+                } else {
+                  // console.log("Pan change:", message[2], "on channel:", channel);
+                  loadedChannelInstruments[channel].reverbSendGainNode.gain.value = message[2];
+                };
+                slider.value = (message[2] - 64) / 64;
+                var r_label = document.getElementById("reverb_label_" + channel);
+                r_label.innerHTML = "Reverb: " + message[2];
+              }, Tone.now());
                 // console.log("Reverb send change:", message[2], "on channel:", channel);
-              }
             };
           } else if (message[0] >= 0xC0 && message[0] < 0xD0) {
             // Program change
             // set the instrument for the channel
-            if (channel != 9) {
-              programNumber = message[1];
-              loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[programNumber].preset;
-            }
+              Tone.Draw.schedule(function(time){
+                if (channel === 9) {
+                  // no pgrogramchange on drum channel
+                } else {
+                  var select = document.getElementById("instrumentSelect_");
+                  if (select === null || userSettings[channel] === undefined || userSettings[channel][select.id] === undefined) {
+                    return; // override by shared url settings
+                  } else {
+                    // console.log("setting instrument from FILE for channel:", channel, "to:", message[1], userSettings);
+                    programNumber = message[1];
+                    loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[message[1]].preset;
+                  }
+                };
+              }, Tone.now());
+            
           } else if (message[0] >= 0xE0 && message[0] < 0xF0) {
             channel = message[0] & 0x0F;
             // Pitch bend
@@ -414,7 +437,7 @@
     function checkForParamsInUrl() {
       const urlParams = new URLSearchParams(window.location.search);
       var playBtn = document.getElementById('playMidi');
-      console.log("URL params:", urlParams);
+      // console.log("URL params:", urlParams);
       const modeParam = urlParams.get('mode');
       if (modeParam) {
         updateSlider_mode(parseInt(modeParam));
@@ -489,7 +512,7 @@
                     const channelSettings = userSettings.channels[channel];
                     for (setting in channelSettings) {
                       const value = channelSettings[setting];
-                      console.log("Setting channel:", channel, "setting:", setting, "value:", value);
+                      // console.log("Setting channel:", channel, "setting:", setting, "value:", value);
                       element = document.getElementById(setting);
                       if (element && element.tagName === 'INPUT' && element.type === 'range') {
                         element.value = value;
@@ -517,7 +540,7 @@
                   playBtn.innerText = "Play MIDI";
                   playBtn.style.color = "red";
                 }
-              }, 300);
+              }, 500);
             } else {
               playBtn.disabled = false;
               playBtn.innerText = "Play MIDI";
@@ -535,7 +558,7 @@
         // console.log("No linked MIDI file found.");
         if (midiInputs.length > 0) {
           console.log("loading piano");
-          loadInstrumentsForProgramChange(0, 0, "Piano");
+          loadInstrumentsForProgramChange(0, 0, 0, "Piano");
         }
       }
     }
@@ -576,7 +599,7 @@
     }
 
     function parseMidiFile() {
-      console.log(midiData);
+      // console.log(midiData);
 
         // reset speed and speed slider to 1
       speedSlider.value = 1.0;
@@ -738,7 +761,7 @@
             const programChange = Math.max(track.instrument["number"] || 0, 0);
             if (channel != 9 && channel >= 0) {
               // preload the instruments for the program change and setup mixer channels
-              loadInstrumentsForProgramChange(channel, programChange, track.name);
+              loadInstrumentsForProgramChange(channel, programChange, 0, track.name);
             }
             if (programChange >= 0) {
               channelParts[channel].add(0, {
@@ -891,7 +914,7 @@
 
     function setupGMPlayer() {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const player = new WebAudioFontPlayer();
+      player = new WebAudioFontPlayer();
       // Create a reverb node
       // Create a convolution reverb node for better quality reverb
       const reverb = audioContext.createConvolver();
@@ -914,10 +937,10 @@
         return new Promise((resolve, reject) => {
           var name = '_tone_' + url.split('/').pop().replace('.js', '');
           player.loader.startLoad(audioContext, url, name);
-          // player.loader.waitLoad(function () {
+          player.loader.waitLoad(function () {
           // console.log('Preset loaded:', name);
-          resolve(name);
-          // });
+            resolve(name);
+          });
         });
       }
 
@@ -926,10 +949,10 @@
           var name = '_drum_' + url;
           var domained_url = "https://surikov.github.io/webaudiofontdata/sound/128" + url + ".js"
           player.loader.startLoad(audioContext, domained_url, name);
-          // player.loader.waitLoad(function () {
+          player.loader.waitLoad(function () {
           // console.log('Drum sound loaded:', name);
-          resolve(name);
-          // });
+            resolve(name);
+          });
         });
       }
 
@@ -987,22 +1010,23 @@
         });
       }
 
-      window.loadInstrumentsForProgramChange = function (channel, programNumber, name) {
+      window.loadInstrumentsForProgramChange = function (channel, programNumber, sfIndex, name) {
         //preload the instruments for the program change and setup mixer channels
         if (!availableInstrumentsForProgramChange[programNumber]) {
           links = linksForProgramChange(programNumber);
           // console.log('Available instruments for program change:', availableInstrumentsForProgramChange[programNumber]);
-          const instrumentUrl = "https://surikov.github.io/webaudiofontdata/sound/" + links.urls[0] + ".js"; // Load the first instrument for now
+          const instrumentUrl = "https://surikov.github.io/webaudiofontdata/sound/" + links.urls[sfIndex] + ".js"; // Load the first instrument for now
           var channelInstrument = createChannelInstrumentForChannel(channel, "loading");
           loadPreset(instrumentUrl)
             .then((preset) => {
               availableInstrumentsForProgramChange[programNumber].preset = preset; // Ensure preset is set correctly
-              availableInstrumentsForProgramChange[programNumber].usingChannels.push(channel);
+              // availableInstrumentsForProgramChange[programNumber].usingChannels.push(channel);
               channelInstrument.preset = preset; // Store the loaded preset
               loadedChannelInstruments[channel] = channelInstrument;
-              loadedChannelInstruments[channel].programIndex = 0;
+              loadedChannelInstruments[channel].programNumber = programNumber;
+              loadedChannelInstruments[channel].sfIndex = sfIndex;
               //create controls for the channel
-              createControlsForChannel(channel, programNumber, name);
+              createControlsForChannel(channel, programNumber, sfIndex, name);
               // console.log('Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments);
             })
             .catch((error) => {
@@ -1012,14 +1036,14 @@
           if (availableInstrumentsForProgramChange[programNumber].preset === "loading") {
             // console.log('Instrument is already loading:', programNumber, availableInstrumentsForProgramChange[programNumber]);
             setTimeout(() => {
-              loadInstrumentsForProgramChange(channel, programNumber, name);
+              loadInstrumentsForProgramChange(channel, programNumber, sfIndex, name);
             }, 300);
             return;
           }
           else {
-            availableInstrumentsForProgramChange[programNumber].usingChannels.push(channel);
+            // availableInstrumentsForProgramChange[programNumber].usingChannels.push(channel);
             loadedChannelInstruments[channel] = createChannelInstrumentForChannel(channel, availableInstrumentsForProgramChange[programNumber].preset);
-            createControlsForChannel(channel, programNumber, name);
+            createControlsForChannel(channel, programNumber, sfIndex, name);
           }
         }
       }
@@ -1085,7 +1109,7 @@
         const reverbSendGainNode = createReverbSendGainNode(channel);
         panNode.connect(reverbSendGainNode);
 
-        var channelInstrument = { preset: preset, programIndex: 0, panNode: panNode, gainNode: gainNode, reverbSendGainNode: reverbSendGainNode };
+        var channelInstrument = { preset: preset, sfIndex: 0, panNode: panNode, gainNode: gainNode, reverbSendGainNode: reverbSendGainNode };
         return channelInstrument;
       }
 
@@ -1100,7 +1124,7 @@
           filter = i.toString();
         }
         var nn = player.loader.findInstrument(i);
-        availableInstrumentsForProgramChange[i] = { name: player.loader.instrumentInfo(nn).title, urls: player.loader.instrumentKeys().filter(url => url.startsWith(filter)), preset: "loading", usingChannels: [] };
+        availableInstrumentsForProgramChange[i] = { name: player.loader.instrumentInfo(nn).title, urls: player.loader.instrumentKeys().filter(url => url.startsWith(filter)), preset: "loading" }; //, usingChannels: [] };
         return availableInstrumentsForProgramChange[i];
       }
 
@@ -1223,7 +1247,7 @@
       }
     }
 
-    function createControlsForChannel(channel, programNumber, name) {
+    function createControlsForChannel(channel, programNumber, sfIndex, name) {
         // Remove old controls if present
         let element = document.getElementById("channel_controls_" + channel);
         let nextSibling = element ? element.nextElementSibling : null;
@@ -1239,33 +1263,56 @@
         controlDiv.appendChild(nameHeader);
 
         let label = document.createElement("label");
-        label.innerHTML = `<em>Channel ${channel} - Program ${programNumber}:</em> <br>${availableInstrumentsForProgramChange[programNumber].name}`;
+        label.style = "margin: 5px;";
+        label.innerHTML = `<strong>Channel ${channel}</strong> - <em>Selected instrument:</em>`;
         controlDiv.appendChild(label);
-
-        // Create a select element for program change
-        let select = document.createElement("select");
-        select.id = "programChange_" + channel;
-        availableInstrumentsForProgramChange[programNumber].urls.forEach((url, i) => {
+        let instSelect = document.createElement("select");
+        instSelect.id = "instrumentSelect_" + channel;
+        player.loader.instrumentTitles().forEach((name, i) => {
           let option = document.createElement("option");
           option.value = i;
-          option.text = url;
+          option.text = i + " - " + name;
+          instSelect.appendChild(option);
+        });
+        instSelect.selectedIndex = programNumber;
+        instSelect.onchange = function (event) {
+          console.log('Instrument changed:', event.target.selectedIndex, event.target.options[event.target.selectedIndex].text);
+          loadInstrumentsForProgramChange(channel, event.target.selectedIndex, 0, event.target.options[event.target.selectedIndex].text);
+          createControlsForChannel(channel, event.target.selectedIndex, 0, event.target.options[event.target.selectedIndex].text);
+          updateUserSettings(event.target.id, event.target.value, channel);
+          // console.log('INSTRUMENT Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments);
+        };
+        controlDiv.appendChild(instSelect);
+        
+        let plabel = document.createElement("label");
+        plabel.innerHTML = `<em>Selected soundfont:</em>`;
+        plabel.style = "margin: 5px;";
+        controlDiv.appendChild(plabel);
+        // Create a select element for soundfont change
+        let select = document.createElement("select");
+        select.id = "sfIndex_" + channel;
+        availableInstrumentsForProgramChange[programNumber].urls.forEach((name, i) => {
+          let option = document.createElement("option");
+          option.value = i;
+          option.text = name;
           select.appendChild(option);
         });
-        select.selectedIndex = loadedChannelInstruments[channel].programIndex;
+        select.selectedIndex = loadedChannelInstruments[channel].sfIndex;
         select.onchange = function (event) {
-          availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
+          const select = event.target;
+          // availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
           availableInstrumentsForProgramChange[programNumber].preset = "loading";
           loadedChannelInstruments[channel].preset = "loading";
           let instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
           loadPreset("https://surikov.github.io/webaudiofontdata/sound/" + instrumentUrl + ".js")
           .then((preset) => {
-            const select = event.target;
             availableInstrumentsForProgramChange[programNumber].preset = preset;
             loadedChannelInstruments[channel].preset = preset;
-            loadedChannelInstruments[channel].programIndex = select.selectedIndex;
-            createControlsForChannel(channel, programNumber, name);
-            document.getElementById("programChange_" + channel).selectedIndex = loadedChannelInstruments[channel].programIndex;
+            loadedChannelInstruments[channel].sfIndex = select.selectedIndex;
+            createControlsForChannel(channel, programNumber, select.selectedIndex, name);
+            document.getElementById("sfIndex_" + channel).selectedIndex = loadedChannelInstruments[channel].sfIndex;
             updateUserSettings(select.id, select.value, channel);
+            // console.log('POGRAM Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments);
           })
         .catch((error) => console.error('Error loading preset:', error));
         };
@@ -1432,10 +1479,10 @@
       noteSelect.id = "drumNoteSelect" + availableSoundsForNote.name;
       noteSelect.style = "margin-top: 10px;";
       availableSoundsForNote.urls.forEach((url, i) => {
-      let option = document.createElement("option");
-      option.value = i;
-      option.text = url;
-      noteSelect.appendChild(option);
+        let option = document.createElement("option");
+        option.value = i;
+        option.text = url;
+        noteSelect.appendChild(option);
       });
       noteSelect.selectedIndex = sf2Index;
       noteSelect.onchange = function (event) {
