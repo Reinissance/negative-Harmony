@@ -511,7 +511,7 @@
 
                   //This is DIRTY: setting Instrument and sfIndex redraws the controls!
                   for (const channel in userSettings.channels) {
-                    const channelSettings = userSettings.channels[channel];
+                    const channelSettings = {...userSettings.channels[channel]};
                     for (setting in channelSettings) {
                       // First set the select elements
                       const value = channelSettings[setting];
@@ -534,7 +534,7 @@
                           element.dispatchEvent(new Event('input'));
                         }
                       }
-                    }, 500);
+                    }, 800);
                   }
                   if (speedParam) {
                     updateUserSettings("speed", speedParam, -1);
