@@ -11,7 +11,7 @@ Upload a MIDI file and hit play. [Try it out here.](https://reinissance.github.i
 
 ### External MIDI File
 
-You can load a MIDI file from an external link, provided the CORS headers of the source allow it (most files on [bitmidi](https://bitmidi.com/) do). Paste the link into the input field. For example, you can share links to specific files like: [Ludwig's Knocking Fate](https://reinissance.github.io/negative-Harmony/index.html?midiFile=https://bitmidi.com/uploads/34948.mid).
+You can load a MIDI file from an external link, provided the CORS headers of the source allow it (most files on [bitmidi](https://bitmidi.com/) do) paste the link into the input field. For example, you can share links to specific files like: [Ludwig's Knocking Fate](https://reinissance.github.io/negative-Harmony/index.html?midiFile=https://bitmidi.com/uploads/34948.mid).
 
 ### External MIDI Devices
 
