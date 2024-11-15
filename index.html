@@ -100,38 +100,40 @@
         </div>
       </div>
     </div>
-    <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0">
-    <div class="horizontal" style="text-align: center;">
-      <div class="sharethis-sticky-share-buttons"></div>
-      <a style="display: none;" href="javascript:void(0);" onclick="share();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
-      <div style="display: flex; flex-direction: column; margin: 10px;">
-        <h3>Midi-Player</h3>
-        <p><em>Upload a local file:</em></p>
-        <input type="file" id="midiUpload" accept=".mid" style="margin-bottom: 10px;" />
-        <p><em>...or try to paste an url here:<br>(e.g. from <a href="https://bitmidi.com/" target="_blank">https://bitmidi.com/</a>,<br>hit enter to submit.)</em></p>
-        <input type="text" id="midiUrl" style="margin-bottom: 10px;" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadPageWithUrl()"/>
-        <button id="playMidi" style="margin-bottom: 10px; color: red; font-weight: bold;">Play MIDI</button>
-        <label for="speedControl">Playback Speed: </label>
-        <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
-      </div>
-      <div>
-        <div id="midiIn">
-          <div>MIDI input:</div>
-          <select id="midiInputs" onchange="console.log(this.value)"></select>
+    <div style="border: 1px solid #ccc; padding: 10px;">
+      <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0">
+      <div class="horizontal" style="text-align: center;">
+        <div class="sharethis-sticky-share-buttons"></div>
+        <a style="display: none;" href="javascript:void(0);" onclick="share();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
+        <div style="display: flex; flex-direction: column; margin: 10px;">
+          <h3>Midi-Player</h3>
+          <p><em>Upload a local file:</em></p>
+          <input type="file" id="midiUpload" accept=".mid" style="margin-bottom: 10px;" />
+          <p><em>...or try to paste an url here:<br>(e.g. from <a href="https://bitmidi.com/" target="_blank">https://bitmidi.com/</a>,<br>hit enter to submit.)</em></p>
+          <input type="text" id="midiUrl" style="margin-bottom: 10px;" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadPageWithUrl()"/>
+          <button id="playMidi" style="margin-bottom: 10px; color: red; font-weight: bold;">Play MIDI</button>
+          <label for="speedControl">Playback Speed: </label>
+          <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
         </div>
-        <div id="midiOut" style="margin-top: 20px;">
-          <div>MIDI output:</div>
-          <select id="midiOutputs" onchange="console.log(this.value)"></select>
+        <div>
+          <div id="midiIn">
+            <div>MIDI input:</div>
+            <select id="midiInputs" onchange="console.log(this.value)"></select>
+          </div>
+          <div id="midiOut" style="margin-top: 20px;">
+            <div>MIDI output:</div>
+            <select id="midiOutputs" onchange="console.log(this.value)"></select>
+          </div>
         </div>
-      </div>
-      <div style="text-align: center;">
-        <div class="col events">
-          MIDI Panic:<br>
-          <button type="button" id="trigger_allNotesOff" onclick="sendEvent_allNotesOff();">allNotesOff</button><br>
+        <div style="text-align: center;">
+          <div class="col events">
+            MIDI Panic:<br>
+            <button type="button" id="trigger_allNotesOff" onclick="sendEvent_allNotesOff();">allNotesOff</button><br>
+          </div>
         </div>
       </div>
     </div>
-    <div style="display: flex; justify-content: space-around; align-items: center;">
+    <div style="display: flex; justify-content: space-around; align-items: center; border: 1px solid #ccc; padding: 10px; margin-top: 20px;">
       <div>
         <h2>Mode:</h2>
         <div>
@@ -196,7 +198,7 @@
         </div>
       </div>
     </div>
-    <div class="horizontal" style="margin: 20px;">
+    <div class="horizontal" style="margin-top: 20px; border: 1px solid #ccc; padding: 10px;">
       <div>
       <label for="reverbSelect">Reverb: </label>
       <select id="reverbSelect" onchange="setIR(this.value);">
@@ -212,12 +214,14 @@
       </div>
     </div>
     <br>
-    <h1 id="midiFileName" class="title" style="width: 100%;"></h1>
-    <div id="file_controls"
-      style="display: flex; flex-direction: row; justify-content: space-between; margin: 10px; flex-wrap: wrap;"></div>
-    <div class="row">
-      <span class="link"><em>powered by <a
-            href="https://github.com/Wasted-Audio/hvcc" target="_blank"><strong>heavy,</strong></a> <a href="https://tonejs.github.io/" target="_blank"><strong>Tone.js</strong></a> and <a href="https://github.com/surikov/webaudiofont" target="_blank"><strong>WebAudioFont</strong></a></em></span>
+    <div style="margin-top: 20px; border: 1px solid #ccc; padding: 10px;">
+      <h1 id="midiFileName" class="title" style="width: 100%;"></h1>
+      <div id="file_controls"
+        style="display: flex; flex-direction: row; justify-content: space-between; margin: 10px; flex-wrap: wrap;"></div>
+      <div class="row">
+        <span class="link"><em>powered by <a
+              href="https://github.com/Wasted-Audio/hvcc" target="_blank"><strong>heavy,</strong></a> <a href="https://tonejs.github.io/" target="_blank"><strong>Tone.js</strong></a> and <a href="https://github.com/surikov/webaudiofont" target="_blank"><strong>WebAudioFont</strong></a></em></span>
+      </div>
     </div>
   </div>
 </body>
