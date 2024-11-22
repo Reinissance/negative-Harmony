@@ -450,23 +450,34 @@ function checkForParamsInUrl() {
                             // loop through the channels and set the values
                             for (const channel in userSettings.channels) {
                                 const channelSettings = { ...userSettings.channels[channel] };
-                                for (setting in channelSettings) {
-                                    // First set the select elements
-                                    const value = channelSettings[setting];
-                                    // console.log("Setting channel:", channel, "setting:", setting, "value:", value);
-                                    var element = document.getElementById(setting);
-                                    if (element && element.tagName === 'SELECT') {
-                                        element.selectedIndex = value;
-                                        element.dispatchEvent(new Event('change'));
-                                        delete channelSettings[setting];
+                                function setSelect(element, index, setting) {
+                                    if (setting.includes("Change")) {
+                                        // drum notes have to match midi notes
+                                        index = parseInt(index) - 35;
                                     }
+                                    element.selectedIndex = index;
+                                    element.dispatchEvent(new Event('change'));
+                                    delete channelSettings[setting];
+                                }
+                                // craete a filter for the keys
+                                const keys = Object.keys(channelSettings);
+                                const selectKeys = keys.filter(key => key.includes("drumNoteChange") || key.includes("Instrument"));
+                                for (const setting of selectKeys) {
+                                    // to keep things in order we first set the select elements for changed drum notes or instruments
+                                    const value = channelSettings[setting];
+                                    var element = document.getElementById(setting);
+                                    setSelect(element, value, setting);
                                 }
                                 setTimeout(() => {
                                     // Now set the sliders
                                     for (setting in channelSettings) {
                                         const value = channelSettings[setting];
-                                        // console.log("Setting channel:", channel, "setting:", setting, "value:", value);
                                         var element = document.getElementById(setting);
+                                        if (element && element.tagName === 'SELECT') {
+                                            element.selectedIndex = value;
+                                            element.dispatchEvent(new Event('change'));
+                                            return;
+                                        }
                                         if (element && element.tagName === 'INPUT' && element.type === 'range') {
                                             element.value = value;
                                             element.dispatchEvent(new Event('input'));
@@ -493,6 +504,14 @@ function checkForParamsInUrl() {
                                     label.textContent = "Playback Speed: " + speedBPM + "bpm";
                                 }
                             }
+
+                            // Load an impulse response for the convolution reverb if not in user settings
+                            if (userSettings.irUrl === undefined) {
+                                // console.log("Loading default impulse response...");
+                                setIR('182806__unfa__ir-02-gunshot-in-a-chapel-mixed');
+                            }
+
+                            // GO!
                             setPlayButtonAcive(true);
                         }
                     }, 800);
@@ -1145,12 +1164,10 @@ function setupGMPlayer() {
                 reverb.buffer = buffer;
                 const reverbSelect = document.getElementById("reverbSelect");
                 updateUserSettings("irUrl", reverbSelect.selectedIndex, -1);
+                console.log("Impulse response loaded:", irUrl);
             })
             .catch(error => console.error('Error loading impulse response:', error));
     }
-
-    // Load an impulse response for the convolution reverb
-    setIR('182806__unfa__ir-02-gunshot-in-a-chapel-mixed');
 
     window.setReverbGain = function (value) {
         reverbGain.gain.value = value;
@@ -1538,7 +1555,9 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
     // check if the note control already exists
     let noteDiv = document.getElementById("drumNoteDiv" + availableSoundsForNote.name);
     if (!noteDiv && callerId) {
-        // if not, new sound was selected, so let's populate the select with the new soundfonts in case of change
+        // if not, new sound was selected, so let's populate the select with the new soundfonts
+        // note: - callerId is the select element that triggered the change
+        //       - handling overridden notes and loading the new sound is done in the select's onchange event
         if (!callerId) return;
         const noteSelId = callerId.replace("drumNoteChangeSelect", "drumNoteSelect")
         var sfSelect = document.getElementById(noteSelId);
@@ -1566,7 +1585,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
 
     let nextSibling = noteDiv ? noteDiv.nextElementSibling : null;
 
-    noteDiv.id = "drumNoteDiv" + availableSoundsForNote.name;
+    noteDiv.id = "drumNoteDiv" + availableSoundsForNote.name.replace(" ", "_");
     noteDiv.style = "display: flex; flex-direction: row; border: 1px solid #ccc; padding: 10px; margin: 5px; align-items: center; width: 45%; justify-content: space-between;";
 
     let noteLabel = document.createElement("label");
@@ -1577,7 +1596,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
     selectDiv.style = "display: flex; flex-direction: column; margin-left: 10px;";
 
     let noteSelect = document.createElement("select");
-    noteSelect.id = "drumNoteChangeSelect" + availableSoundsForNote.name;
+    noteSelect.id = "drumNoteChangeSelect" + availableSoundsForNote.name.replace(/ /g, "_");
     player.loader.drumTitles().forEach((name, i) => {
         let option = document.createElement("option");
         option.value = i;
@@ -1593,11 +1612,12 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
             addNoteToDrumInstrument(note, availableDrumSoundsForNote[event.target.selectedIndex + 35].preset);
         }
         drumInstrument.overriddenNotes[note] = event.target.selectedIndex + 35;
+        updateUserSettings(event.target.id, event.target.value, 9);
     }
     selectDiv.appendChild(noteSelect);
 
     let noteSfSelect = document.createElement("select");
-    noteSfSelect.id = "drumNoteSelect" + availableSoundsForNote.name;
+    noteSfSelect.id = "drumNoteSelect" + availableSoundsForNote.name.replace(/ /g, "_");
     noteSfSelect.style = "margin-top: 10px;";
     availableSoundsForNote.urls.forEach((url, i) => {
         let option = document.createElement("option");
@@ -1610,6 +1630,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
         availableDrumSoundsForNote[note].preset = "loading";
         drumInstrument.notes[note] = "loading";
         let index = event.target.selectedIndex;
+        // in case the note is overriden by another note, use the overridden note
         const selNote = (note in drumInstrument.overriddenNotes) ? drumInstrument.overriddenNotes[note] : note;
         availableSoundsForNote = availableDrumSoundsForNote[selNote];
         let drumSoundUrl = availableSoundsForNote.urls[index];
@@ -1622,6 +1643,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
                 updateUserSettings(event.target.id, index, 9);
             })
             .catch((error) => console.error('Error loading drum sound:', error));
+        updateUserSettings(event.target.id, event.target.value, 9);
     };
     selectDiv.appendChild(noteSfSelect);
     noteDiv.appendChild(selectDiv);
