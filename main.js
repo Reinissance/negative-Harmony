@@ -22,6 +22,7 @@ let normal = false; // for pitchbend to be possibly turned upside down if not no
 let sustain = {}; // notes that are sustained
 let sustainedNodes = {}; // nodes that are sustained
 let userSettings = { "channels": {} }; // Store user settings for or from shared via URL
+let fileSettings = {}; // Store the settings from the loaded MIDI file
 let audioContext = null; // Create an audio context
 let soloChannels = []; // Store the soloed channels
 
@@ -238,40 +239,14 @@ function onMidiOutMessage(message) {
                 } else if (message[1] === 7) {
                     // Volume
                     // console.log("Volume change:", message[2], "on channel:", channel);
-                    Tone.Draw.schedule(function (time) {
-                        var slider = document.getElementById("volumeSlider_" + ((channel != 9) ? channel : "drum"));
-                        if (slider === null || userSettings[channel] === undefined || userSettings[channel][slider.id] === undefined) {
-                            return; // override by shared url settings
-                        }
-                        if (channel === 9) {
-                            drumInstrument.gainNode.gain.value = message[2] / 127;
-                            // console.log("Volume change:", message[2], "on DRUMchannel");
-                        } else {
-                            // console.log("Volume change:", message[2], "on channel:", channel);
-                            loadedChannelInstruments[channel].gainNode.gain.value = message[2] / 127;
-                        }
-                        slider.value = message[2];
-                        var v_label = document.getElementById("vol_label_" + channel);
-                        v_label.innerHTML = "Volume: " + (message[2] / 127).toFixed(2);
-                    }, Tone.now());
+                    handleControlSettingFromFile(channel, "volume", message[2] / 127);
                 } else if (message[1] === 10) {
                     // Pan
-                    Tone.Draw.schedule(function (time) {
-                        var slider = document.getElementById("panSlider_" + (channel != 9) ? channel : "drum");
-                        if (slider === null || userSettings[channel] === undefined || userSettings[channel][slider.id] === undefined) {
-                            return; // override by shared url settings
-                        }
-                        if (channel === 9) {
-                            drumInstrument.panNode.pan.value = (message[2] - 64) / 64;
-                            // console.log("Pan change:", message[2], "on DRUMchannel");
-                        } else {
-                            // console.log("Pan change:", message[2], "on channel:", channel);
-                            loadedChannelInstruments[channel].panNode.pan.value = (message[2] - 64) / 64;
-                        };
-                        slider.value = (message[2] - 64) / 64;
-                        var p_label = document.getElementById("pan_label_" + channel);
-                        p_label.innerHTML = "Panning: " + ((message[2] - 64) / 64).toFixed(2);
-                    }, Tone.now());
+                    handleControlSettingFromFile(channel, "pan", (message[2] - 64) / 64);
+                } else if (message[1] === 91) {
+                    // Reverb send
+                    handleControlSettingFromFile(channel, "reverb", message[2] / 127);
+                    // console.log("Reverb send change:", message[2], "on channel:", channel);
                 } else if (message[1] === 64) {
                     // Sustain pedal
                     if (message[2] > 0) {
@@ -281,42 +256,24 @@ function onMidiOutMessage(message) {
                             node.cancel();
                         }
                         sustain[channel] = false;
-
                     }
                     // console.log("Sustain pedal:", message[2], "on channel:", channel);
-                } else if (message[1] === 91) {
-                    // Reverb send
-                    Tone.Draw.schedule(function (time) {
-                        var slider = document.getElementById("reverbSlider_" + (channel != 9) ? channel : "drum");
-                        if (slider === null || userSettings[channel] === undefined || userSettings[channel][slider.id] === undefined) {
-                            return; // override by shared url settings
-                        }
-                        if (channel === 9) {
-                            // no reverb on drum channel yet
-                        } else {
-                            // console.log("Pan change:", message[2], "on channel:", channel);
-                            loadedChannelInstruments[channel].reverbSendGainNode.gain.value = message[2];
-                        };
-                        slider.value = (message[2] - 64) / 64;
-                        var r_label = document.getElementById("reverb_label_" + channel);
-                        r_label.innerHTML = "Reverb: " + message[2];
-                    }, Tone.now());
-                    // console.log("Reverb send change:", message[2], "on channel:", channel);
                 };
             } else if (message[0] >= 0xC0 && message[0] < 0xD0) {
                 // Program change
                 // set the instrument for the channel
                 Tone.Draw.schedule(function (time) {
                     if (channel === 9) {
-                        // no pgrogramchange on drum channel
+                        // no programchange on drum channel
                     } else {
-                        var select = document.getElementById("instrumentSelect_");
+                        var select = setResettable(channel, "instrumentSelect_" + channel, message[1], "select");
                         if (select === null || userSettings[channel] === undefined || userSettings[channel][select.id] === undefined) {
                             return; // override by shared url settings
                         } else {
                             // console.log("setting instrument from FILE for channel:", channel, "to:", message[1], userSettings);
-                            programNumber = message[1];
                             loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[message[1]].preset;
+                            select.selectedIndex = message[1];
+                            select.dispatchEvent(new Event('change'));
                         }
                     };
                 }, Tone.now());
@@ -338,6 +295,47 @@ function onMidiOutMessage(message) {
             console.error("No MIDI output port available.");
         }
     }
+}
+
+function setResettable (channel, setting, value, type) {
+    let resetSetting = fileSettings[channel] || {};
+    // console.log("resetable: ", channel, setting, value, type, ":", fileSettings[channel]);
+    switch (type) {
+        case "slider":
+            var id = setting + "Slider_" + ((channel != 9) ? channel : "drum");
+            resetSetting[id] = value;
+            var slider = document.getElementById(id);
+            fileSettings[channel] = resetSetting;
+            return slider;
+        case "select":
+            var id = setting;
+            resetSetting[id] = value;
+            var select = document.getElementById(id);
+            fileSettings[channel] = resetSetting;
+            return select;
+    }
+}
+
+function handleControlSettingFromFile(channel, setting, value) {
+
+    var slider = setResettable(channel, setting, value, "slider");
+
+    Tone.Draw.schedule(function (time) {
+        
+        if (slider === null || userSettings[channel] === undefined || userSettings[channel][slider.id] === undefined) {
+            return; // override by shared url settings
+        }
+        if (channel === 9) {
+            drumInstrument.gainNode.gain.value = value;
+            // console.log("Volume change:", message[2], "on DRUMchannel");
+        } else {
+            // console.log("Volume change:", message[2], "on channel:", channel);
+            loadedChannelInstruments[channel].gainNode.gain.value = value;
+        }
+        slider.value = message[2];
+        var v_label = document.getElementById(setting.substring(0, 3) + "_label_" + channel);
+        v_label.innerHTML = setting.charAt(0).toUpperCase() + setting.slice(1) + ": " + value.toFixed(2);
+    }, Tone.now());
 }
 
 function onSendMessage(sendName, message) {
@@ -474,7 +472,13 @@ function checkForParamsInUrl() {
                                             element.dispatchEvent(new Event('input'));
                                         }
                                     }
-                                }, 500);
+                                    // show reset button
+                                    // console.log("Setting channel:", channel, "settings:", userSettings.channels[channel]);
+                                    var resetBtn = document.getElementById("resetButton_" + channel);
+                                    if (resetBtn) {
+                                        resetBtn.style.display = "block";
+                                    }
+                                }, 800);
                             }
                             if (speedParam) {
                                 // speed needs to be set after the channel settings for some reason
@@ -505,7 +509,7 @@ function checkForParamsInUrl() {
         setPlayButtonAcive(true);
         // console.log("No linked MIDI file found.");
         if (midiInputs.length > 0) {
-            console.log("loading piano");
+            console.log("loading default: piano");
             loadInstrumentsForProgramChange(0, 0, 0, "Piano");
         }
     }
@@ -660,6 +664,8 @@ function setupMidiPlayer() {
             Tone.Transport.timeSignature = timeSignature.timeSignature;
         }
 
+        let lastPC = 0;
+
         // Loop through each track in the MIDI file
         midi.tracks.forEach((track, trackIndex) => {
             // exclude empty tracks
@@ -705,10 +711,15 @@ function setupMidiPlayer() {
 
             // Schedule program change events
             if (track.instrument !== undefined) {
-                const programChange = Math.max(track.instrument["number"] || 0, 0);
+                const programChange = track.instrument["number"] || lastPC;
+                lastPC = programChange;
                 if (channel != 9 && channel >= 0) {
                     // preload the instruments for the program change and setup mixer channels
                     loadInstrumentsForProgramChange(channel, programChange, 0, track.name);
+                    // if (fileSettings[channel] === undefined) {
+                        var select = setResettable(channel, "instrumentSelect_" + channel, programChange, "select");
+                        // console.log("setting resetter from FILE for channel:", channel, "to:", programChange, userSettings);
+                    // }
                 }
                 if (programChange >= 0) {
                     channelParts[channel].add(0, {
@@ -721,7 +732,7 @@ function setupMidiPlayer() {
                     track.notes.forEach(note => {
                         if (!availableDrumSoundsForNote[note.midi]) {
                             // preload the drum sounds for each used note
-                            loadDrumSoundForNote(note.midi);
+                            loadDrumSoundForNote(note.midi, 0);
                         }
                     });
                 }
@@ -1022,19 +1033,19 @@ function setupGMPlayer() {
         }
     }
 
-    window.loadDrumSoundForNote = function (note) {
+    window.loadDrumSoundForNote = function (note, sfIndex, callerId, overriddenNote) {
         if (!availableDrumSoundsForNote[note]) {
             links = linksForDrumSound(note);
             // console.log('Available drum sounds for note:', availableDrumSoundsForNote[note]);
-            const drumSoundUrl = links.urls[0]; // Load the first drum sound for now
-            addNoteToDrumInstrument(note, "loading");
+            const drumSoundUrl = links.urls[sfIndex]; // Load the first drum sound for now
+            addNoteToDrumInstrument((overriddenNote) ? overriddenNote : note, "loading");
             if (drumSoundUrl != undefined) {
                 loadDrumSound(drumSoundUrl)
                     .then((preset) => {
                         availableDrumSoundsForNote[note].preset = preset;
-                        addNoteToDrumInstrument(note, preset);
+                        addNoteToDrumInstrument((overriddenNote) ? overriddenNote : note, preset);
                         // console.log('Drum sound loaded and decoded. AVAILABLE:', availableDrumSoundsForNote);
-                        createDrumInstrumentControl(note, 0);
+                        createDrumInstrumentControl(note, sfIndex, callerId);
                     })
                     .catch((error) => {
                         console.error('Error loading drum sound:', error);
@@ -1043,21 +1054,21 @@ function setupGMPlayer() {
                 console.warn("No drum sound URL found for note:", note);
             }
         } else {
-            if (availableDrumSoundsForNote[note].preset === "loading") {
-                // console.log('Drum sound is already loading:', note, availableDrumSoundsForNote[note]);
+            if (availableDrumSoundsForNote[(overriddenNote) ? overriddenNote : note].preset === "loading") {
+                // console.log('Drum sound is already loading:', (overriddenNote) ? overriddenNote : note, availableDrumSoundsForNote[(overriddenNote) ? overriddenNote : note]);
                 setTimeout(() => {
-                    loadDrumSoundForNote(note);
+                    loadDrumSoundForNote(note, sfIndex, callerId, overriddenNote);
                 }, 300);
                 return;
             }
             else {
-                addNoteToDrumInstrument(note, availableDrumSoundsForNote[note].preset);
-                createDrumInstrumentControl(note, 0);
+                addNoteToDrumInstrument((overriddenNote) ? overriddenNote : note, availableDrumSoundsForNote[note].preset);
+                // console.log('Drum sound already loaded:', (overriddenNote) ? overriddenNote : note, availableDrumSoundsForNote[(overriddenNote) ? overriddenNote : note]);
             }
         }
     }
 
-    function addNoteToDrumInstrument(note, preset) {
+    window.addNoteToDrumInstrument = function(note, preset) {
         if (!drumInstrument) {
             var gainNode = audioContext.createGain();
             gainNode.gain.value = 1.0;
@@ -1065,7 +1076,11 @@ function setupGMPlayer() {
             panNode.pan.value = 0;
             gainNode.connect(panNode);
             panNode.connect(audioContext.destination);
-            drumInstrument = { notes: {}, gainNode: gainNode, panNode: panNode };
+            drumInstrument = { notes: {}, overriddenNotes: {}, gainNode: gainNode, panNode: panNode };
+            resetSetting = fileSettings[9] || {};
+            resetSetting["volumeSlider_drum"] = 127.0;
+            resetSetting["panSlider_drum"] = 0.0;
+            fileSettings[9] = resetSetting;
         }
         drumInstrument.notes[note] = preset;
         // console.log('Drum instrument:', drumInstrument);
@@ -1083,6 +1098,12 @@ function setupGMPlayer() {
         panNode.pan.value = 0;
         gainNode.connect(panNode);
         panNode.connect(audioContext.destination);
+        // create default reset settings for the channel
+        resetSetting = fileSettings[channel] || {};
+        resetSetting["volumeSlider_" + channel] = 127.0;
+        resetSetting["reverbSlider_" + channel] = 0.7;
+        resetSetting["panSlider_" + channel] = 0.0;
+        fileSettings[channel] = resetSetting;
 
         // Create and connect reverb send gain node
         const reverbSendGainNode = createReverbSendGainNode(channel);
@@ -1107,7 +1128,7 @@ function setupGMPlayer() {
         return availableInstrumentsForProgramChange[i];
     }
 
-    function linksForDrumSound(i) {
+    window.linksForDrumSound = function (i) {
         filter = i.toString();
         var nn = player.loader.findDrum(i);
         info = player.loader.drumInfo(nn);
@@ -1196,6 +1217,10 @@ function updateUserSettings(key, value, channel) {
         userSettings[key] = value;
     } else {
         // for channel settings
+        if (userSettings.channels[channel] === undefined) {
+            resetBtn = document.getElementById("resetButton_" + channel);
+            resetBtn.style.display = "block";
+        }
         userSettings.channels[channel] = userSettings.channels[channel] || {};
         userSettings.channels[channel][key] = value;
     }
@@ -1207,9 +1232,34 @@ function updateUserSettings(key, value, channel) {
     // console.log("User settings updated:", userSettings);
 }
 
+function resetChannelSettings(channel) {
+    // console.log("Resetting channel settings for channel:", channel, fileSettings[channel]);
+    for (setting in fileSettings[channel]) {
+        let value = fileSettings[channel][setting];
+        var element = document.getElementById(setting);
+        if (element && element.tagName === 'SELECT') {
+            element.selectedIndex = value;
+            element.dispatchEvent(new Event('change'));
+        } else if (element && element.tagName === 'INPUT' && element.type === 'range') {
+            value = (setting === "panning") ? value * 127 - 64 : value * 127;
+            element.value = value;
+            element.dispatchEvent(new Event('input'));
+        }
+    }
+    // remove the channel from userSettings
+    userSettings.channels[channel] = undefined
+    // hide the reset button
+    var resetBtn = document.getElementById("resetButton_" + channel);
+    resetBtn.style.display = "none";
+}
+
 function cleanup() {
     userSettings = { "channels": {} };
+    fileSettings = {};
     lastNotes = [];
+    loadedChannelInstruments = {};
+    drumInstrument.notes = {};
+    drumInstrument.overriddenNotes = {};
     var midiFileName = document.getElementById("midiFileName");
     midiFileName.innerHTML = "";
     var element = document.getElementById("file_controls");
@@ -1244,9 +1294,12 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
     nameHeader.innerHTML = name;
     controlDiv.appendChild(nameHeader);
 
+    let resetButton = createResetButton(channel);
+    controlDiv.appendChild(resetButton);
+
     let label = document.createElement("label");
     label.style = "margin: 5px;";
-    label.innerHTML = `<strong>Channel ${channel}</strong> - <em>Selected instrument:</em>`;
+    label.innerHTML = `<strong>Channel ${channel}</strong><br><em>Selected instrument:</em>`;
     controlDiv.appendChild(label);
 
     let instSelect = document.createElement("select");
@@ -1332,75 +1385,67 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
     solodiv.appendChild(soloLabel);
     controlDiv.appendChild(solodiv);
 
-    // Volume control
-    let vol_label = document.createElement("label");
-    vol_label.id = "vol_label_" + channel;
-    let volumeSlider = document.createElement("input");
-    volumeSlider.id = "volumeSlider_" + channel;
-    volumeSlider.type = "range";
-    volumeSlider.min = 0;
-    volumeSlider.max = 127;
-    volumeSlider.value = (channel in loadedChannelControlValues && 7 in loadedChannelControlValues[channel])
-        ? loadedChannelControlValues[channel][7] * 127
-        : loadedChannelInstruments[channel].gainNode.gain.value * 127;
-    vol_label.innerHTML = `Volume: ${(volumeSlider.value / 127).toFixed(2)}`;
-    volumeSlider.setAttribute('data-channel', channel);
-    volumeSlider.oninput = function (event) {
-        let slider = event.target;
-        let channel = slider.getAttribute('data-channel');
-        loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
-        document.getElementById("vol_label_" + channel).innerHTML = `Volume: ${(slider.value / 127).toFixed(2)}`;
-        updateUserSettings(slider.id, slider.value, channel);
-    };
-    controlDiv.appendChild(vol_label);
-    controlDiv.appendChild(volumeSlider);
+    function createControl(type, channel, label, min, max, step, value, onInput) {
+        let controlLabel = document.createElement("label");
+        controlLabel.id = `${type}_label_${channel}`;
+        controlLabel.style = "margin-top: 10px;";
+        controlLabel.innerHTML = `${label}: ${parseFloat(value).toFixed(2)}`;
 
-    // Pan control
-    let pan_label = document.createElement("label");
-    pan_label.id = "pan_label_" + channel;
-    let panSlider = document.createElement("input");
-    panSlider.id = "panSlider_" + channel;
-    panSlider.type = "range";
-    panSlider.min = -1;
-    panSlider.max = 1;
-    panSlider.step = 0.01;
-    panSlider.value = (channel in loadedChannelControlValues && 10 in loadedChannelControlValues[channel])
-        ? loadedChannelControlValues[channel][10] * 2 - 1
-        : loadedChannelInstruments[channel].panNode.pan.value;
-    pan_label.innerHTML = `Panning: ${parseFloat(panSlider.value).toFixed(2)}`;
-    panSlider.setAttribute('data-channel', channel);
-    panSlider.oninput = function (event) {
-        let slider = event.target;
-        let channel = slider.getAttribute('data-channel');
-        loadedChannelInstruments[channel].panNode.pan.value = slider.value;
-        document.getElementById("pan_label_" + channel).innerHTML = `Panning: ${parseFloat(slider.value).toFixed(2)}`;
-        updateUserSettings(slider.id, slider.value, channel);
-    };
-    controlDiv.appendChild(pan_label);
-    controlDiv.appendChild(panSlider);
+        let controlSlider = document.createElement("input");
+        controlSlider.id = `${type}Slider_${channel}`;
+        controlSlider.type = "range";
+        controlSlider.min = min;
+        controlSlider.max = max;
+        controlSlider.step = step;
+        controlSlider.value = value;
+        controlSlider.setAttribute('data-channel', channel);
+        controlSlider.oninput = onInput;
 
-    // Reverb send control
-    let reverb_label = document.createElement("label");
-    reverb_label.id = "reverb_label_" + channel;
-    reverb_label.style = "margin-top: 10px;";
-    let reverbSlider = document.createElement("input");
-    reverbSlider.id = "reverbSlider_" + channel;
-    reverbSlider.type = "range";
-    reverbSlider.min = 0;
-    reverbSlider.max = 1;
-    reverbSlider.step = 0.01;
-    reverbSlider.value = loadedChannelInstruments[channel].reverbSendGainNode.gain.value;
-    reverb_label.innerHTML = `Reverb Send: ${parseFloat(reverbSlider.value).toFixed(2)}`;
-    reverbSlider.setAttribute('data-channel', channel);
-    reverbSlider.oninput = function (event) {
-        let slider = event.target;
-        let channel = slider.getAttribute('data-channel');
-        loadedChannelInstruments[channel].reverbSendGainNode.gain.value = slider.value;
-        document.getElementById("reverb_label_" + channel).innerHTML = `Reverb Send: ${parseFloat(slider.value).toFixed(2)}`;
-        updateUserSettings(slider.id, slider.value, channel);
-    };
-    controlDiv.appendChild(reverb_label);
-    controlDiv.appendChild(reverbSlider);
+        return { controlLabel, controlSlider };
+    }
+
+    let volumeControl = createControl("volume", channel, "Volume", 0, 127, 1, 
+        (channel in loadedChannelControlValues && 7 in loadedChannelControlValues[channel])
+            ? loadedChannelControlValues[channel][7] * 127
+            : loadedChannelInstruments[channel].gainNode.gain.value * 127,
+        function (event) {
+            let slider = event.target;
+            let channel = slider.getAttribute('data-channel');
+            loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
+            document.getElementById("volume_label_" + channel).innerHTML = `Volume: ${(slider.value / 127).toFixed(2)}`;
+            updateUserSettings(slider.id, slider.value, channel);
+        }
+    );
+    controlDiv.appendChild(volumeControl.controlLabel);
+    controlDiv.appendChild(volumeControl.controlSlider);
+
+    let panControl = createControl("pan", channel, "Panning", -1, 1, 0.01, 
+        (channel in loadedChannelControlValues && 10 in loadedChannelControlValues[channel])
+            ? loadedChannelControlValues[channel][10] * 2 - 1
+            : loadedChannelInstruments[channel].panNode.pan.value,
+        function (event) {
+            let slider = event.target;
+            let channel = slider.getAttribute('data-channel');
+            loadedChannelInstruments[channel].panNode.pan.value = slider.value;
+            document.getElementById("pan_label_" + channel).innerHTML = `Panning: ${parseFloat(slider.value).toFixed(2)}`;
+            updateUserSettings(slider.id, slider.value, channel);
+        }
+    );
+    controlDiv.appendChild(panControl.controlLabel);
+    controlDiv.appendChild(panControl.controlSlider);
+
+    let reverbControl = createControl("reverb", channel, "Reverb Send", 0, 1, 0.01, 
+        loadedChannelInstruments[channel].reverbSendGainNode.gain.value,
+        function (event) {
+            let slider = event.target;
+            let channel = slider.getAttribute('data-channel');
+            loadedChannelInstruments[channel].reverbSendGainNode.gain.value = slider.value;
+            document.getElementById("reverb_label_" + channel).innerHTML = `Reverb Send: ${parseFloat(slider.value).toFixed(2)}`;
+            updateUserSettings(slider.id, slider.value, channel);
+        }
+    );
+    controlDiv.appendChild(reverbControl.controlLabel);
+    controlDiv.appendChild(reverbControl.controlSlider);
 
     if (nextSibling) {
         controls.insertBefore(controlDiv, nextSibling);
@@ -1409,11 +1454,22 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
     }
 }
 
-function createDrumInstrumentControl(note, sf2Index) {
+function createResetButton(channel) {let resetButton = document.createElement("button");
+    resetButton.innerHTML = "Reset to file settings";
+    resetButton.id = "resetButton_" + channel;
+    resetButton.style.display = "none";
+    resetButton.onclick = function () {
+        resetChannelSettings(channel);
+    };
+    return resetButton;
+}
+
+function createDrumInstrumentControl(note, sf2Index, callerId) {
     let availableSoundsForNote = availableDrumSoundsForNote[note];
     let controlDiv = document.getElementById("drum_controls");
     let noteDivs = document.getElementById("drumNoteDivs");
     if (!controlDiv) {
+        // create the drum instrument controls if they don't exist
         let controls = document.getElementById("file_controls");
         controlDiv = document.createElement("div");
         controlDiv.id = "drum_controls";
@@ -1423,6 +1479,8 @@ function createDrumInstrumentControl(note, sf2Index) {
         nameHeader.innerHTML = "Drum Instrument";
         nameHeader.className = "title";
         controlDiv.appendChild(nameHeader);
+        let resetButton = createResetButton(9);
+        controlDiv.appendChild(resetButton);
 
         let vol_label = document.createElement("label");
         vol_label.id = "vol_label_drum";
@@ -1477,31 +1535,83 @@ function createDrumInstrumentControl(note, sf2Index) {
         controls.appendChild(controlDiv);
     }
 
+    // check if the note control already exists
     let noteDiv = document.getElementById("drumNoteDiv" + availableSoundsForNote.name);
-    let nextSibling = noteDiv ? noteDiv.nextElementSibling : null;
-    if (noteDiv) noteDiv.remove();
+    if (!noteDiv && callerId) {
+        // if not, new sound was selected, so let's populate the select with the new soundfonts in case of change
+        if (!callerId) return;
+        const noteSelId = callerId.replace("drumNoteChangeSelect", "drumNoteSelect")
+        var sfSelect = document.getElementById(noteSelId);
+        // console.log('Drum note control already exists:', note, availableSoundsForNote, noteSelId, sfSelect.options);
+        sfSelect.innerHTML = "";
+        availableSoundsForNote.urls.forEach((url, i) => {
+            let option = document.createElement("option");
+            option.value = i;
+            option.text = url;
+            sfSelect.appendChild(option);
+        });
+        sfSelect.selectedIndex = sf2Index;
+        // console.log('Drum note soundfont select populated:', sfSelect.options);
+        return;
+    } else {
+        if (noteDiv) {
+            return;
+        }
+        else if (!callerId) {
+            // if not, create a new note control
+            noteDiv = document.createElement("div");
+            // console.log('Creating new drum note control:', note, availableSoundsForNote);
+        }
+    };
 
-    noteDiv = document.createElement("div");
+    let nextSibling = noteDiv ? noteDiv.nextElementSibling : null;
+
     noteDiv.id = "drumNoteDiv" + availableSoundsForNote.name;
+    noteDiv.style = "display: flex; flex-direction: row; border: 1px solid #ccc; padding: 10px; margin: 5px; align-items: center; width: 45%; justify-content: space-between;";
 
     let noteLabel = document.createElement("label");
     noteLabel.innerHTML = `${availableSoundsForNote.name}: `;
     noteDiv.appendChild(noteLabel);
 
+    let selectDiv = document.createElement("div");
+    selectDiv.style = "display: flex; flex-direction: column; margin-left: 10px;";
+
     let noteSelect = document.createElement("select");
-    noteSelect.id = "drumNoteSelect" + availableSoundsForNote.name;
-    noteSelect.style = "margin-top: 10px;";
+    noteSelect.id = "drumNoteChangeSelect" + availableSoundsForNote.name;
+    player.loader.drumTitles().forEach((name, i) => {
+        let option = document.createElement("option");
+        option.value = i;
+        option.text = name;
+        noteSelect.appendChild(option);
+    });
+    noteSelect.selectedIndex = note - 35;
+    noteSelect.onchange = function (event) {
+        // console.log('Drum note changed:', event.target.selectedIndex + 35, event.target.options[event.target.selectedIndex].text);
+        if (!availableDrumSoundsForNote[event.target.selectedIndex + 35]) {
+            loadDrumSoundForNote(event.target.selectedIndex + 35, 0,  event.target.id, note);
+        } else {
+            addNoteToDrumInstrument(note, availableDrumSoundsForNote[event.target.selectedIndex + 35].preset);
+        }
+        drumInstrument.overriddenNotes[note] = event.target.selectedIndex + 35;
+    }
+    selectDiv.appendChild(noteSelect);
+
+    let noteSfSelect = document.createElement("select");
+    noteSfSelect.id = "drumNoteSelect" + availableSoundsForNote.name;
+    noteSfSelect.style = "margin-top: 10px;";
     availableSoundsForNote.urls.forEach((url, i) => {
         let option = document.createElement("option");
         option.value = i;
         option.text = url;
-        noteSelect.appendChild(option);
+        noteSfSelect.appendChild(option);
     });
-    noteSelect.selectedIndex = sf2Index;
-    noteSelect.onchange = function (event) {
+    noteSfSelect.selectedIndex = sf2Index;
+    noteSfSelect.onchange = function (event) {
         availableDrumSoundsForNote[note].preset = "loading";
         drumInstrument.notes[note] = "loading";
         let index = event.target.selectedIndex;
+        const selNote = (note in drumInstrument.overriddenNotes) ? drumInstrument.overriddenNotes[note] : note;
+        availableSoundsForNote = availableDrumSoundsForNote[selNote];
         let drumSoundUrl = availableSoundsForNote.urls[index];
         loadDrumSound(drumSoundUrl)
             .then((preset) => {
@@ -1513,7 +1623,8 @@ function createDrumInstrumentControl(note, sf2Index) {
             })
             .catch((error) => console.error('Error loading drum sound:', error));
     };
-    noteDiv.appendChild(noteSelect);
+    selectDiv.appendChild(noteSfSelect);
+    noteDiv.appendChild(selectDiv);
 
     if (nextSibling) {
         noteDivs.insertBefore(noteDiv, nextSibling);
