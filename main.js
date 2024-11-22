@@ -857,7 +857,7 @@ function setupMidiPlayer() {
                 progressSlider.style.display = "block";
 
                 // Update the progress slider during playback
-                Tone.Transport.scheduleRepeat(() => {
+                Tone.Transport.scheduleRepeat((time) => {
                     if (playing) {
                         const progress = (Tone.Transport.seconds / (midiData.duration / speed)) * 100;
                         progressSlider.value = progress;
@@ -866,7 +866,7 @@ function setupMidiPlayer() {
                             // console.log("Stopping playback...");
                             playBtn.innerText = "Play MIDI";
                             playing = false;
-                            Tone.Transport.stop();
+                            Tone.Transport.stop(time);
                             Tone.Transport.position = 0;
                             progressSlider.value = 0;
                             progressSlider.style.display = "none";
@@ -1164,7 +1164,7 @@ function setupGMPlayer() {
                 reverb.buffer = buffer;
                 const reverbSelect = document.getElementById("reverbSelect");
                 updateUserSettings("irUrl", reverbSelect.selectedIndex, -1);
-                console.log("Impulse response loaded:", irUrl);
+                // console.log("Impulse response loaded:", irUrl);
             })
             .catch(error => console.error('Error loading impulse response:', error));
     }
