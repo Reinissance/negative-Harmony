@@ -282,13 +282,13 @@ function onMidiOutMessage(message) {
                 channel = message[0] & 0x0F;
                 // Pitch bend
                 let value = (message[1]) / 8192;
-                if (!normal)
-                    value *= -1;
+                // if (!normal)
+                //     value *= -1;
                 // apply pitchbend to channel notes
-                const channelNotes = midiNotes.filter(note => note.channel === channel);
-                for (const note of channelNotes) {
-                    handlePitchBend(note, value);
-                }
+                // const channelNotes = midiNotes.filter(note => note.channel === channel);
+                // for (const note of channelNotes) {
+                //     handlePitchBend(note, value);
+                // }
             }
         }
         else {
