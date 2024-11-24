@@ -281,14 +281,15 @@ function onMidiOutMessage(message) {
             } else if (message[0] >= 0xE0 && message[0] < 0xF0) {
                 channel = message[0] & 0x0F;
                 // Pitch bend
-                let value = (message[1]) / 8192;
-                // if (!normal)
-                //     value *= -1;
+                let normalizedBend = message[1] / 8192; // Normalized to -1 to +1
+                const bendInSemitones = normalizedBend * (message[2]);
+
+                // console.log("Pitch bend:", message, "on channel:", channel, "normalized:", normalizedBend, "semitones:", bendInSemitones);
                 // apply pitchbend to channel notes
-                // const channelNotes = midiNotes.filter(note => note.channel === channel);
-                // for (const note of channelNotes) {
-                //     handlePitchBend(note, value);
-                // }
+                const channelNotes = midiNotes.filter(note => note.channel === channel);
+                for (const note of channelNotes) {
+                    handlePitchBend(note, bendInSemitones);
+                }
             }
         }
         else {
@@ -633,7 +634,9 @@ function setupMidiPlayer() {
             shares.style.display = "none";
         }
 
-        cleanup();
+        if (midiData) {
+            cleanup();
+        }
 
         // console.log("Loading MIDI file...");
         const file = event.target.files[0];
@@ -762,9 +765,10 @@ function setupMidiPlayer() {
                 track.pitchBends.forEach(bend => {
                     channelParts[channel].add(bend.time, {
                         type: 'pitchBend',
-                        value: (bend.value + 1) * 8192,
+                        value: (bend.value + 1) * 8192, //pd bendin takes values from 0 to 16383
                         channel: channel
                     });
+                    // console.log("Pitch bend:", bend, "on channel:", channel);
                 });
             }
 
@@ -1009,8 +1013,9 @@ function setupGMPlayer() {
     }
 
     window.handlePitchBend = function (note, value) {
+        const factor = (!normal) ? -1 : 1;
         // set pitch bend to the playback rate
-        note.envelope.audioBufferSourceNode.playbackRate.linearRampToValueAtTime(note.envelope.audioBufferSourceNode.playbackRate.value + value, audioContext.currentTime + 0.1);
+        note.envelope.audioBufferSourceNode.playbackRate.linearRampToValueAtTime(note.envelope.audioBufferSourceNode.playbackRate.value * Math.pow(2, value / 12 * factor), audioContext.currentTime + 0.1);
     }
 
     window.loadInstrumentsForProgramChange = function (channel, programNumber, sfIndex, name) {
