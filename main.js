@@ -281,11 +281,15 @@ function onMidiOutMessage(message) {
             } else if (message[0] >= 0xE0 && message[0] < 0xF0) {
                 channel = message[0] & 0x0F;
                 // Pitch bend
-                let normalizedBend = message[1] / 8192; // Normalized to -1 to +1
-                const bendInSemitones = normalizedBend * (message[2]);
+                let pitchBendValue = (message[2] << 7) | message[1]; // Combine the two 7-bit values into a 14-bit value
+                let normalizedBend = (pitchBendValue - 8192) / 8192; // Normalize to -1 to +1
 
-                // console.log("Pitch bend:", message, "on channel:", channel, "normalized:", normalizedBend, "semitones:", bendInSemitones);
-                // apply pitchbend to channel notes
+                // Assuming a pitch bend range of 2 semitones (can be adjusted per channel)
+                const pitchBendRange = 2; // Default pitch bend range in semitones
+                const bendInSemitones = normalizedBend * pitchBendRange;
+
+                console.log("Pitch bend:", message, "on channel:", channel, "normalized:", normalizedBend, "semitones:", bendInSemitones);
+                // Apply pitch bend to channel notes
                 const channelNotes = midiNotes.filter(note => note.channel === channel);
                 for (const note of channelNotes) {
                     handlePitchBend(note, bendInSemitones);
@@ -1012,10 +1016,15 @@ function setupGMPlayer() {
         });
     }
 
-    window.handlePitchBend = function (note, value) {
+    window.handlePitchBend = function (note, semitones) {
         const factor = (!normal) ? -1 : 1;
         // set pitch bend to the playback rate
-        note.envelope.audioBufferSourceNode.playbackRate.linearRampToValueAtTime(note.envelope.audioBufferSourceNode.playbackRate.value * Math.pow(2, value / 12 * factor), audioContext.currentTime + 0.1);
+        console.log("Pitch bend:", semitones, "env:", note.envelope);
+        if (note.envelope.audioBufferSourceNode.detune !== undefined) {
+            note.envelope.audioBufferSourceNode.detune.value = semitones * 100 * factor;
+        } else {
+            note.envelope.audioBufferSourceNode.playbackRate.value = Math.pow(2, semitones / 12 * factor);
+        }
     }
 
     window.loadInstrumentsForProgramChange = function (channel, programNumber, sfIndex, name) {
