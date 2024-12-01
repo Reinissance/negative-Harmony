@@ -288,7 +288,7 @@ function onMidiOutMessage(message) {
                 const pitchBendRange = 2; // Default pitch bend range in semitones
                 const bendInSemitones = normalizedBend * pitchBendRange;
 
-                console.log("Pitch bend:", message, "on channel:", channel, "normalized:", normalizedBend, "semitones:", bendInSemitones);
+                // console.log("Pitch bend:", message, "on channel:", channel, "normalized:", normalizedBend, "semitones:", bendInSemitones);
                 // Apply pitch bend to channel notes
                 const channelNotes = midiNotes.filter(note => note.channel === channel);
                 for (const note of channelNotes) {
@@ -396,12 +396,13 @@ function checkForParamsInUrl() {
     const negRootParam = urlParams.get('negRoot');
     if (negRootParam) {
         updateSlider_negRoot(parseFloat(negRootParam));
-        const negRootRadios = document.getElementsByName("negRoot");
-        for (const radio of negRootRadios) {
-            if (radio.value === negRootParam) {
-                radio.checked = true;
+        const negRootSelect = document.getElementById("parameter_negRoot");
+        // select option by value
+        for (const option of negRootSelect.options) {
+            if (parseFloat(option.value) === parseFloat(negRootParam)) {
+                option.selected = true;
             } else {
-                radio.checked = false;
+                option.selected = false;
             }
         }
     }
@@ -1019,7 +1020,7 @@ function setupGMPlayer() {
     window.handlePitchBend = function (note, semitones) {
         const factor = (!normal) ? -1 : 1;
         // set pitch bend to the playback rate
-        console.log("Pitch bend:", semitones, "env:", note.envelope);
+        // console.log("Pitch bend:", semitones, "env:", note.envelope);
         if (note.envelope.audioBufferSourceNode.detune !== undefined) {
             note.envelope.audioBufferSourceNode.detune.value = semitones * 100 * factor;
         } else {

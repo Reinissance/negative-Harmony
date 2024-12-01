@@ -10,6 +10,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js"></script>
   <script src="https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js"></script>
   <script src="https://unpkg.com/@tonejs/midi"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
   <script type='text/javascript' src='https://platform-api.sharethis.com/js/sharethis.js#property=672a9419d01e2b00125529f4&product=sop' async='async'></script>
 
   <style>
@@ -83,8 +84,8 @@
 </head>
 
 <body>
-  <div class="widget">
-    <div class="title horizontal">
+  <div class="widget container">
+    <div class="title horizontal row">
       <div class="col">
         <h2>negative Harmony</h2>
         <p><em>Playback MIDI-Files possibly in negative Harmony.</em></p>
@@ -93,27 +94,25 @@
         style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center;">
         <div style="text-align: center;">
           <h3 id="start_prompt" style="color: red;">please click start here first:</h3>
-          <label>
-            start / stop
-            <input type="checkbox" id="transportButton" onchange="toggleTransport();">
-          </label>
+          <input type="checkbox" class="btn-check" id="transportButton" autocomplete="off" onchange="toggleTransport();" style="display: none;">
+          <label class="btn btn-outline-primary" for="transportButton">start / stop</label>
         </div>
       </div>
     </div>
     <div style="border: 1px solid #ccc; padding: 10px;">
-      <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0">
+      <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0" class="form-range">
       <div class="horizontal" style="text-align: center;">
         <div class="sharethis-sticky-share-buttons"></div>
         <a style="display: none;" href="javascript:void(0);" onclick="share();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
         <div style="display: flex; flex-direction: column; margin: 10px;">
           <h3>Midi-Player</h3>
           <p><em>Upload a local file:</em></p>
-          <input type="file" id="midiUpload" accept=".mid" style="margin-bottom: 10px;" />
+          <input type="file" id="midiUpload" class="form-control" accept=".mid" style="margin-bottom: 10px;" />
           <p><em>...or try to paste an url here:<br>(e.g. from <a href="https://bitmidi.com/" target="_blank">https://bitmidi.com/</a>,<br>hit enter to submit.)</em></p>
-          <input type="text" id="midiUrl" style="margin-bottom: 10px;" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadPageWithUrl()"/>
-          <button id="playMidi" style="margin-bottom: 10px; color: red; font-weight: bold;">Play MIDI</button>
+          <input type="text" id="midiUrl" style="margin-bottom: 10px;" class="form-control" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadPageWithUrl()"/>
+          <button  class="btn btn-outline-danger" id="playMidi" style="margin-bottom: 10px; color: rgb(150, 0, 0); font-weight: bold;">Play MIDI</button>
           <label for="speedControl">Playback Speed: </label>
-          <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" />
+          <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" class="form-range"/>
         </div>
         <div>
           <div id="midiIn">
@@ -128,7 +127,7 @@
         <div style="text-align: center;">
           <div class="col events">
             MIDI Panic:<br>
-            <button type="button" id="trigger_allNotesOff" onclick="sendEvent_allNotesOff();">allNotesOff</button><br>
+            <button type="button" id="trigger_allNotesOff" class="btn btn-outline-warning" onclick="sendEvent_allNotesOff();">allNotesOff</button><br>
           </div>
         </div>
       </div>
@@ -137,71 +136,43 @@
       <div>
         <h2>Mode:</h2>
         <div>
-          <input id="parameter_mode_1" type="radio" name="mode" value="0.0" onchange="updateSlider_mode(value);">
-          <label for="parameter_mode_1">normal</label><br>
-          <input id="parameter_mode_2" type="radio" name="mode" value="1.0" onchange="updateSlider_mode(value);">
-          <label for="parameter_mode_2"
-            title="Mirrors notes around the axis of the middle D (C Major becomes A minor and vice versa).">lefthand
-            Piano</label><br>
-          <input id="parameter_mode_3"
-            title="Mirrors notes around an axis between the 3rds of the root note (eg. C Major becomes C minor and vice versa)."
-            type="radio" name="mode" value="2.0" checked onchange="updateSlider_mode(value);">
-          <label for="parameter_mode_3">negative Harmony</label><br>
+          <select class="form-select" id="parameter_mode" onchange="updateSlider_mode(this.value);">
+        <option value="0.0">normal</option>
+        <option value="1.0" title="Mirrors notes around the axis of the middle D (C Major becomes A minor and vice versa).">lefthand Piano</option>
+        <option value="2.0" title="Mirrors notes around an axis between the 3rds of the root note (eg. C Major becomes C minor and vice versa)." selected>negative Harmony</option>
+          </select>
         </div>
       </div>
       <div id="negRoots">
         <h3>Root:</h3>
-        <div>
-          <input id="parameter_negRoot_1" type="radio" name="negRoot" value="57"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_1">Gb</label><br>
-          <input id="parameter_negRoot_2" type="radio" name="negRoot" value="64"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_2">Db</label><br>
-          <input id="parameter_negRoot_3" type="radio" name="negRoot" value="59"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_3">Ab</label><br>
-          <input id="parameter_negRoot_4" type="radio" name="negRoot" value="66"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_4">Eb</label><br>
-          <input id="parameter_negRoot_5" type="radio" name="negRoot" value="61"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_5">Bb</label><br>
-          <input id="parameter_negRoot_6" type="radio" name="negRoot" value="56"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_6">F</label><br>
-          <input id="parameter_negRoot_7" type="radio" name="negRoot" value="63" checked
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_7">C</label><br>
-          <input id="parameter_negRoot_8" type="radio" name="negRoot" value="58"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_8">G</label><br>
-          <input id="parameter_negRoot_9" type="radio" name="negRoot" value="65"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_9">D</label><br>
-          <input id="parameter_negRoot_10" type="radio" name="negRoot" value="60"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_10">A</label><br>
-          <input id="parameter_negRoot_11" type="radio" name="negRoot" value="67"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_11">E</label><br>
-          <input id="parameter_negRoot_12" type="radio" name="negRoot" value="62"
-            onchange="updateSlider_negRoot(value);">
-          <label for="parameter_negRoot_12">B(deutsch: H)</label><br>
-        </div>
+        <select class="form-select" id="parameter_negRoot" onchange="updateSlider_negRoot(this.value);">
+          <option value="57">Gb</option>
+          <option value="64">Db</option>
+          <option value="59">Ab</option>
+          <option value="66">Eb</option>
+          <option value="61">Bb</option>
+          <option value="56">F</option>
+          <option value="63" selected>C</option>
+          <option value="58">G</option>
+          <option value="65">D</option>
+          <option value="60">A</option>
+          <option value="67">E</option>
+          <option value="62">B(deutsch: H)</option>
+        </select>
       </div>
       <div id="perOkt">
         <h3>perOktave</h3>
-        <div class="col parameter-slider">
-          <input id="parameter_perOktave" type="checkbox" checked
+        <div>
+          <input id="parameter_perOktave" class="btn-check" type="checkbox" checked
             onchange="updateSlider_perOktave(this.checked ? 1.0 : 0.0);">
+            <label class="btn btn-outline-secondary" for="parameter_perOktave">per Oktave</label><br>
         </div>
       </div>
     </div>
     <div class="horizontal" style="margin-top: 20px; border: 1px solid #ccc; padding: 10px;">
       <div>
       <label for="reverbSelect">Reverb: </label>
-      <select id="reverbSelect" onchange="setIR(this.value);">
+      <select class="form-select" id="reverbSelect" onchange="setIR(this.value);">
         <option value="182806__unfa__ir-02-gunshot-in-a-chapel-mixed">Chapel</option>
         <option value="192228__ligidium__shower-clap-open">Shower</option>
         <option value="463610__greybrother01__winter-forest-01">Winterforest</option>
