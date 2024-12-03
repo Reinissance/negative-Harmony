@@ -882,7 +882,7 @@ function setupMidiPlayer() {
                             sendEvent_allNotesOff();
                         }
                     }
-                }, '0.1s');
+                }, Tone.now());
             } else {
                 alert("Please upload a MIDI file or paste a url to a file first.");
                 console.error("No MIDI file loaded or parsed.");
@@ -1321,6 +1321,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
     let controlDiv = document.createElement("div");
     controlDiv.id = "channel_controls_" + channel;
     controlDiv.style = "display: flex; flex-direction: column; margin: 10px; border: 1px solid #ccc; padding: 10px;";
+    controlDiv.classList.add("boxed");
 
     let nameHeader = document.createElement("h3");
     nameHeader.innerHTML = name;
@@ -1343,6 +1344,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
         instSelect.appendChild(option);
     });
     instSelect.selectedIndex = programNumber;
+    instSelect.classList.add("form-select");
     instSelect.onchange = function (event) {
         // console.log('Instrument changed:', event.target.selectedIndex, event.target.options[event.target.selectedIndex].text);
         loadInstrumentsForProgramChange(channel, event.target.selectedIndex, 0, event.target.options[event.target.selectedIndex].text);
@@ -1396,6 +1398,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
             })
             .catch((error) => console.error('Error loading preset:', error));
     };
+    select.classList.add("form-select");
     controlDiv.appendChild(select);
 
     let solodiv = document.createElement("div");
@@ -1410,9 +1413,11 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
             soloChannels = soloChannels.filter(c => c !== channel);
         }
     };
+    soloCheckbox.classList.add("btn-check"); 
     let soloLabel = document.createElement("label");
     soloLabel.htmlFor = soloCheckbox.id;
     soloLabel.innerHTML = "Solo";
+    soloLabel.classList.add("btn", "btn-outline-warning", "boxed");
     solodiv.appendChild(soloCheckbox);
     solodiv.appendChild(soloLabel);
     controlDiv.appendChild(solodiv);
@@ -1432,6 +1437,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
         controlSlider.value = value;
         controlSlider.setAttribute('data-channel', channel);
         controlSlider.oninput = onInput;
+        controlSlider.classList.add("form-range");
 
         return { controlLabel, controlSlider };
     }
@@ -1493,6 +1499,8 @@ function createResetButton(channel) {let resetButton = document.createElement("b
     resetButton.onclick = function () {
         resetChannelSettings(channel);
     };
+
+    resetButton.classList.add("btn", "btn-outline-warning", "boxed");
     return resetButton;
 }
 
@@ -1506,6 +1514,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
         controlDiv = document.createElement("div");
         controlDiv.id = "drum_controls";
         controlDiv.style = "display: flex; flex-direction: column; margin: 10px; width: 100%; border: 1px solid #ccc; padding: 10px;";
+        controlDiv.classList.add("boxed");
 
         let nameHeader = document.createElement("h3");
         nameHeader.innerHTML = "Drum Instrument";
@@ -1531,6 +1540,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
             document.getElementById("vol_label_drum").innerHTML = `Volume: ${(event.target.value / 127).toFixed(2)}`;
             updateUserSettings(event.target.id, event.target.value, 9);
         };
+        volumeSlider.classList.add("form-range");
         controlDiv.appendChild(vol_label);
         controlDiv.appendChild(volumeSlider);
 
@@ -1551,6 +1561,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
             document.getElementById("pan_label_drum").innerHTML = `Panning: ${parseFloat(event.target.value).toFixed(2)}`;
             updateUserSettings(event.target.id, event.target.value, 9);
         };
+        panSlider.classList.add("form-range");
         controlDiv.appendChild(pan_label);
         controlDiv.appendChild(panSlider);
 
@@ -1561,7 +1572,8 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
 
         noteDivs = document.createElement("div");
         noteDivs.id = "drumNoteDivs";
-        noteDivs.style = "display: flex; flex-direction: row; flex-wrap: wrap; justify-content: space-between;";
+        // noteDivs.style = "display: flex; flex-direction: row; flex-wrap: wrap; justify-content: space-between;";
+        noteDivs.classList.add("horizontal");
         controlDiv.appendChild(noteDivs);
 
         controls.appendChild(controlDiv);
@@ -1602,6 +1614,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
 
     noteDiv.id = "drumNoteDiv" + availableSoundsForNote.name.replace(" ", "_");
     noteDiv.style = "display: flex; flex-direction: row; border: 1px solid #ccc; padding: 10px; margin: 5px; align-items: center; width: 45%; justify-content: space-between;";
+    noteDiv.classList.add("boxed");
 
     let noteLabel = document.createElement("label");
     noteLabel.innerHTML = `${availableSoundsForNote.name}: `;
@@ -1629,6 +1642,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
         drumInstrument.overriddenNotes[note] = event.target.selectedIndex + 35;
         updateUserSettings(event.target.id, event.target.value, 9);
     }
+    noteSelect.classList.add("form-select");
     selectDiv.appendChild(noteSelect);
 
     let noteSfSelect = document.createElement("select");
@@ -1653,13 +1667,14 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
             .then((preset) => {
                 availableDrumSoundsForNote[note].preset = preset;
                 drumInstrument.notes[note] = preset;
-                createDrumInstrumentControl(note, index);
+                createDrumInstrumentControl(note, index, event.target.id);
                 event.target.selectedIndex = index;
                 updateUserSettings(event.target.id, index, 9);
             })
             .catch((error) => console.error('Error loading drum sound:', error));
         updateUserSettings(event.target.id, event.target.value, 9);
     };
+    noteSfSelect.classList.add("form-select");
     selectDiv.appendChild(noteSfSelect);
     noteDiv.appendChild(selectDiv);
 

@@ -3,6 +3,7 @@
 
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>negative Harmony</title>
 
   <!-- Generated javascript library includes -->
@@ -12,116 +13,52 @@
   <script src="https://unpkg.com/@tonejs/midi"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
   <script type='text/javascript' src='https://platform-api.sharethis.com/js/sharethis.js#property=672a9419d01e2b00125529f4&product=sop' async='async'></script>
-
-  <style>
-    .horizontal {
-      display: flex;
-      justify-content: space-evenly;
-      align-items: center;
-    }
-
-    .widget {
-      max-width: 900px;
-      margin: auto;
-    }
-
-    .row {
-      width: 100%;
-      margin-bottom: 10px;
-    }
-
-    .col {
-      display: inline-block;
-    }
-
-    .events {
-      vertical-align: top;
-      margin: 10px;
-    }
-
-    .title {
-      width: 80%;
-      margin: 0 auto;
-    }
-
-    .transport {
-      padding-left: 10px;
-    }
-
-    .parameter-name {
-      width: 35%;
-      text-align: right;
-    }
-
-    .parameter-slider {
-      width: 45%;
-      padding-left: 10px;
-    }
-
-    .parameter-slider input {
-      vertical-align: middle;
-      width: 100%;
-    }
-
-    .parameter-value {
-      width: 10%;
-      padding-left: 10px;
-      text-align: left;
-    }
-
-    .link {
-      margin: 10px 10px 0 0;
-      float: right;
-    }
-
-    span {
-      text-align: right;
-    }
-  </style>
-
   <script type="application/javascript" src="./main.js"></script>
+
+  <link rel="stylesheet" href="style.css">
   
 </head>
-
-<body>
-  <div class="widget container">
-    <div class="title horizontal row">
-      <div class="col">
-        <h2>negative Harmony</h2>
-        <p><em>Playback MIDI-Files possibly in negative Harmony.</em></p>
-      </div>
-      <div id="col_transport" class="col transport"
-        style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center;">
-        <div style="text-align: center;">
-          <h3 id="start_prompt" style="color: red;">please click start here first:</h3>
-          <input type="checkbox" class="btn-check" id="transportButton" autocomplete="off" onchange="toggleTransport();" style="display: none;">
-          <label class="btn btn-outline-primary" for="transportButton">start / stop</label>
-        </div>
-      </div>
+<body class="boxed">
+  <div id="col_transport" class="col transport"
+    style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center;">
+    <div style="text-align: center;">
+      <h3 id="start_prompt" style="color: red;">please click start here first:</h3>
+      <input type="checkbox" class="btn-check" id="transportButton" autocomplete="off" onchange="toggleTransport();" style="display: none;">
+      <label class="btn btn-outline-primary" for="transportButton">start / stop</label>
     </div>
-    <div style="border: 1px solid #ccc; padding: 10px;">
-      <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0" class="form-range">
+  </div>
+  <div class="title horizontal row">
+    <div class="col">
+      <h2>negative Harmony</h2>
+      <p><em>Playback MIDI-Files possibly in negative Harmony.</em></p>
+    </div>
+  </div>
+  <div class="boxed remain widget horizontal" style="padding: 20px; -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(10px);">
+    <div class="sharethis-sticky-share-buttons"></div>
+    <a class="remain" style="display: none; box-shadow: 0 0 10px rgb(215, 118, 21); width: 50px;" href="javascript:void(0);" onclick="share();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
+    <button  class="btn btn-outline-danger remain" id="playMidi" style="margin-top: 20px; min-height: 50px; color: rgb(150, 0, 0); font-weight: bold; background-color: rgba(255, 0, 0, 0.353);">Play MIDI</button>
+    <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0" class="form-range">
+  </div>
+  <div class="widget container">
+    <div  class="boxed">
       <div class="horizontal" style="text-align: center;">
-        <div class="sharethis-sticky-share-buttons"></div>
-        <a style="display: none;" href="javascript:void(0);" onclick="share();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
         <div style="display: flex; flex-direction: column; margin: 10px;">
           <h3>Midi-Player</h3>
           <p><em>Upload a local file:</em></p>
           <input type="file" id="midiUpload" class="form-control" accept=".mid" style="margin-bottom: 10px;" />
           <p><em>...or try to paste an url here:<br>(e.g. from <a href="https://bitmidi.com/" target="_blank">https://bitmidi.com/</a>,<br>hit enter to submit.)</em></p>
           <input type="text" id="midiUrl" style="margin-bottom: 10px;" class="form-control" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadPageWithUrl()"/>
-          <button  class="btn btn-outline-danger" id="playMidi" style="margin-bottom: 10px; color: rgb(150, 0, 0); font-weight: bold;">Play MIDI</button>
           <label for="speedControl">Playback Speed: </label>
           <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" class="form-range"/>
         </div>
         <div>
           <div id="midiIn">
             <div>MIDI input:</div>
-            <select id="midiInputs" onchange="console.log(this.value)"></select>
+            <select class="form-control" id="midiInputs" onchange="console.log(this.value)"></select>
           </div>
           <div id="midiOut" style="margin-top: 20px;">
             <div>MIDI output:</div>
-            <select id="midiOutputs" onchange="console.log(this.value)"></select>
+            <select class="form-control" id="midiOutputs" onchange="console.log(this.value)"></select>
           </div>
         </div>
         <div style="text-align: center;">
@@ -132,7 +69,7 @@
         </div>
       </div>
     </div>
-    <div style="display: flex; justify-content: space-around; align-items: center; border: 1px solid #ccc; padding: 10px; margin-top: 20px;">
+    <div class="boxed horizontal">
       <div>
         <h2>Mode:</h2>
         <div>
@@ -165,11 +102,11 @@
         <div>
           <input id="parameter_perOktave" class="btn-check" type="checkbox" checked
             onchange="updateSlider_perOktave(this.checked ? 1.0 : 0.0);">
-            <label class="btn btn-outline-secondary" for="parameter_perOktave">per Oktave</label><br>
+            <label class="btn btn-outline-warning" for="parameter_perOktave">per Oktave</label><br>
         </div>
       </div>
     </div>
-    <div class="horizontal" style="margin-top: 20px; border: 1px solid #ccc; padding: 10px;">
+    <div class="horizontal boxed" style="margin-top: 20px;">
       <div>
       <label for="reverbSelect">Reverb: </label>
       <select class="form-select" id="reverbSelect" onchange="setIR(this.value);">
@@ -181,14 +118,13 @@
       </div>
       <div>
         <label for="reverbVolume">Reverb Volume: </label>
-        <input type="range" id="reverbVolume" min="0.0" max="1.5" step="0.01" value="0.5" oninput="setReverbGain(this.value);" />
+        <input type="range" id="reverbVolume" min="0.0" max="1.5" step="0.01" value="0.5" oninput="setReverbGain(this.value);" class="form-range"/>
       </div>
     </div>
     <br>
-    <div style="margin-top: 20px; border: 1px solid #ccc; padding: 10px;">
+    <div class="boxed">
       <h1 id="midiFileName" class="title" style="width: 100%;"></h1>
-      <div id="file_controls"
-        style="display: flex; flex-direction: row; justify-content: space-around; margin: 10px; flex-wrap: wrap;"></div>
+      <div id="file_controls" class="horizontal"></div>
       <div class="row">
         <span class="link"><em>powered by <a
               href="https://github.com/Wasted-Audio/hvcc" target="_blank"><strong>heavy,</strong></a> <a href="https://tonejs.github.io/" target="_blank"><strong>Tone.js</strong></a> and <a href="https://github.com/surikov/webaudiofont" target="_blank"><strong>WebAudioFont</strong></a></em></span>
