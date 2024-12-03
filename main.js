@@ -78,7 +78,6 @@ function stop() {
 function toggleTransport(element) {
     (loader.isPlaying) ? stop() : start();
     var transportButton = document.getElementById("transportButton");
-    console.log("Transport button:", transportButton);
     transportButton.style.display = "none";
     // hide the label too
     var transportLabel = document.getElementById("transportLabel");
@@ -403,12 +402,13 @@ function checkForParamsInUrl() {
     if (negRootParam) {
         updateSlider_negRoot(parseFloat(negRootParam));
         const negRootSelect = document.getElementById("parameter_negRoot");
-        // select option by value
+        
+        // find the options value that matches the lowest note        
         for (const option of negRootSelect.options) {
-            if (parseFloat(option.value) === parseFloat(negRootParam)) {
-                option.selected = true;
-            } else {
-                option.selected = false;
+            if (parseInt(option.value) % 12 === negRootParam % 12) {
+                negRootSelect.selectedIndex = negRootParam % 12;
+                updateSlider_negRoot(parseInt(option.value));
+                break;
             }
         }
     }
@@ -473,23 +473,19 @@ function checkForParamsInUrl() {
                                 }
                                 // craete a filter for the keys
                                 const keys = Object.keys(channelSettings);
-                                const selectKeys = keys.filter(key => key.includes("drumNoteChange") || key.includes("Instrument"));
+                                const selectKeys = keys.filter(key => key.includes("drumNoteChange") || key.includes("instrument"));
                                 for (const setting of selectKeys) {
                                     // to keep things in order we first set the select elements for changed drum notes or instruments
                                     const value = channelSettings[setting];
                                     var element = document.getElementById(setting);
                                     setSelect(element, value, setting);
                                 }
+                                // very dirty: after setting the select elements, which loads the soundfonts, we set the sliders
                                 setTimeout(() => {
                                     // Now set the sliders
                                     for (setting in channelSettings) {
                                         const value = channelSettings[setting];
                                         var element = document.getElementById(setting);
-                                        if (element && element.tagName === 'SELECT') {
-                                            element.selectedIndex = value;
-                                            element.dispatchEvent(new Event('change'));
-                                            return;
-                                        }
                                         if (element && element.tagName === 'INPUT' && element.type === 'range') {
                                             element.value = value;
                                             element.dispatchEvent(new Event('input'));
@@ -800,16 +796,16 @@ function setupMidiPlayer() {
             // get the lowest note
             const lowestNote = Math.min(...lastNotes);
             // set root input to the lowest note
-            const negRootRadios = document.getElementsByName("negRoot");
-            for (const radio of negRootRadios) {
-                if ((parseFloat(radio.value) + 3) % 12 === (lowestNote + 6) % 12) {
-                    radio.checked = true;
-                    updateSlider_negRoot(parseFloat(radio.value));
+            const negRootSelect = document.getElementById("parameter_negRoot");
+            // find the options value that matches the lowest note
+            for (const option of negRootSelect.options) {
+                if (parseInt(option.value) % 12 === lowestNote % 12) {
+                    negRootSelect.selectedIndex = lowestNote % 12;
+                    updateSlider_negRoot(parseInt(option.value));
                     break;
-                } else {
-                    radio.checked = false;
                 }
             }
+            
         }
 
         // Start all parts
@@ -888,7 +884,7 @@ function setupMidiPlayer() {
                             sendEvent_allNotesOff();
                         }
                     }
-                }, Tone.now());
+                }, "0.1");
             } else {
                 alert("Please upload a MIDI file or paste a url to a file first.");
                 console.error("No MIDI file loaded or parsed.");
