@@ -23,7 +23,6 @@
     padding: 10px;
     -webkit-backdrop-filter: blur(5px); /* Safari */
     backdrop-filter: blur(5px);
-    margin-top: 20px;
   }
 
   .widget {
@@ -73,8 +72,13 @@
     text-align: right;
   }
 
-  .form-control, .form-select {
+  .form-control, .form-select, .accordion-button {
     background-color: #ffffff87;
+    color: white;
+  }
+
+  .accordion-item {
+    background-color: rgba(0, 0, 0, 0.307);
   }
 
   .horizontal {
