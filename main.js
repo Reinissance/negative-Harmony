@@ -77,6 +77,12 @@ function stop() {
 
 function toggleTransport(element) {
     (loader.isPlaying) ? stop() : start();
+    var transportButton = document.getElementById("transportButton");
+    console.log("Transport button:", transportButton);
+    transportButton.style.display = "none";
+    // hide the label too
+    var transportLabel = document.getElementById("transportLabel");
+    transportLabel.style.display = "none";
 }
 
 function onPrint(message) {
@@ -1613,8 +1619,8 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
     let nextSibling = noteDiv ? noteDiv.nextElementSibling : null;
 
     noteDiv.id = "drumNoteDiv" + availableSoundsForNote.name.replace(" ", "_");
-    noteDiv.style = "display: flex; flex-direction: row; border: 1px solid #ccc; padding: 10px; margin: 5px; align-items: center; width: 45%; justify-content: space-between;";
-    noteDiv.classList.add("boxed");
+    noteDiv.style = "display: flex; flex-direction: row; border: 1px solid #ccc; padding: 10px; margin: 5px; align-items: center; justify-content: space-between;";
+    noteDiv.classList.add("boxed", "stretch");
 
     let noteLabel = document.createElement("label");
     noteLabel.innerHTML = `${availableSoundsForNote.name}: `;

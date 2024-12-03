@@ -20,11 +20,11 @@
 </head>
 <body class="boxed">
   <div id="col_transport" class="col transport"
-    style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center;">
+    style="position: sticky; top: 0; left: 0; width: 88vw; height: 95vh; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center; overflow: hidden;">
     <div style="text-align: center;">
       <h3 id="start_prompt" style="color: red;">please click start here first:</h3>
       <input type="checkbox" class="btn-check" id="transportButton" autocomplete="off" onchange="toggleTransport();" style="display: none;">
-      <label class="btn btn-outline-primary" for="transportButton">start / stop</label>
+      <label class="btn btn-outline-primary" id="transportLabel" for="transportButton">start</label>
     </div>
   </div>
   <div class="title horizontal row">
