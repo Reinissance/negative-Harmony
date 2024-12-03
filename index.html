@@ -23,7 +23,7 @@
 </head>
 <body class="boxed">
   <div id="col_transport" class="col transport"
-    style="position: sticky; top: 0; left: 0; width: 88vw; height: 95vh; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center; overflow: hidden;">
+    style="position: sticky; top: 0; left: 0; width: 100%; height: 100vh; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center; overflow: hidden;">
     <div style="text-align: center;">
       <h3 id="start_prompt" style="color: red;">please click start here first:</h3>
       <input type="checkbox" class="btn-check" id="transportButton" autocomplete="off" onchange="toggleTransport();" style="display: none;">
@@ -165,7 +165,7 @@
         <div class="accordion-body">
           <div>
             <h1 id="midiFileName" class="title" style="width: 100%;"></h1>
-            <div id="file_controls" class="horizontal"></div>
+            <div id="file_controls" class="horizontal"><p>no MIDI file loaded.</p></div>
           </div>
         </div>
       </div>
