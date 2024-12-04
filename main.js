@@ -1066,6 +1066,7 @@ function setupGMPlayer() {
                     // create controls for the channel
                     createControlsForChannel(channel, programNumber, sfIndex, name);
                     // console.log('Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments);
+                    cleanCashed();
                 })
                 .catch((error) => {
                     console.error('Error loading preset:', error);
@@ -1083,6 +1084,7 @@ function setupGMPlayer() {
                 loadedChannelInstruments[channel] = createChannelInstrumentForChannel(channel, availableInstrumentsForProgramChange[programNumber].preset, sfIndex);
                 loadedChannelInstruments[channel].programNumber = programNumber;
                 createControlsForChannel(channel, programNumber, sfIndex, name);
+                cleanCashed();
             }
         }
     }
@@ -1100,6 +1102,7 @@ function setupGMPlayer() {
                         addNoteToDrumInstrument((overriddenNote) ? overriddenNote : note, preset);
                         // console.log('Drum sound loaded and decoded. AVAILABLE:', availableDrumSoundsForNote);
                         createDrumInstrumentControl(note, sfIndex, callerId);
+                        cleanCashed();
                     })
                     .catch((error) => {
                         console.error('Error loading drum sound:', error);
@@ -1118,6 +1121,7 @@ function setupGMPlayer() {
             else {
                 addNoteToDrumInstrument((overriddenNote) ? overriddenNote : note, availableDrumSoundsForNote[note].preset);
                 // console.log('Drum sound already loaded:', (overriddenNote) ? overriddenNote : note, availableDrumSoundsForNote[(overriddenNote) ? overriddenNote : note]);
+                cleanCashed();
             }
         }
     }
@@ -1339,6 +1343,30 @@ function cleanup() {
         window[cachedInstr] = null;
         console.log("Releasing cached instrument:", cachedInstr);
         player.loader.cached.splice(i, 1);
+    }
+}
+
+function cleanCashed () {
+    let inUse = [];
+    for (inst in loadedChannelInstruments) {
+        if (availableInstrumentsForProgramChange[loadedChannelInstruments[inst].programNumber]) {
+            inUse.push(availableInstrumentsForProgramChange[loadedChannelInstruments[inst].programNumber].preset);
+        }
+    }
+    for (note in loadDrumSoundForNote) {
+        if (availableDrumSoundsForNote[note]) {
+            inUse.push(availableDrumSoundsForNote[note].preset);
+        }
+    }
+    console.log("presets inUse:", inUse);
+    for (let i = player.loader.cached.length - 1; i >= 0; i--) {
+        // release the cached instruments in WebAudioFontPlayer
+        let cachedInstr = player.loader.cached[i];
+        if (!inUse.includes(cachedInstr)) {
+            window[cachedInstr] = null;
+            console.log("Releasing cached instrument:", cachedInstr);
+            player.loader.cached.splice(i, 1);
+        }
     }
 }
 
