@@ -441,6 +441,7 @@ function checkForParamsInUrl() {
             .then(response => response.arrayBuffer())
             .then(data => {
                 midiData = new Midi(data);
+                document.getElementById("file_controls").innerHTML = "";
                 parseMidiFile();
 
                 // paste the midi file url into the input field
@@ -468,6 +469,7 @@ function checkForParamsInUrl() {
                                         index = parseInt(index) - 35;
                                     }
                                     element.selectedIndex = index;
+                                    // console.log("Setting SELECT:", setting, "to:", index);
                                     element.dispatchEvent(new Event('change'));
                                     delete channelSettings[setting];
                                 }
@@ -486,9 +488,16 @@ function checkForParamsInUrl() {
                                     for (setting in channelSettings) {
                                         const value = channelSettings[setting];
                                         var element = document.getElementById(setting);
+                                        if (element && element.tagName === 'SELECT') {
+                                            element.selectedIndex = value;
+                                            element.dispatchEvent(new Event('change'));
+                                            // console.log("Setting OTHER SELECT:", setting, "to:", value);
+                                            return;
+                                        }
                                         if (element && element.tagName === 'INPUT' && element.type === 'range') {
                                             element.value = value;
                                             element.dispatchEvent(new Event('input'));
+                                            // console.log("Setting SLIDER:", setting, "to:", value);
                                         }
                                     }
                                     // show reset button
@@ -631,7 +640,16 @@ function setupMidiPlayer() {
 
     // Handle MIDI file upload
     document.getElementById('midiUpload').addEventListener('change', (event) => {
-
+        if (playing) {
+            // console.log("Stopping playback...");
+            Tone.Transport.stop();
+            Tone.Transport.position = 0;
+            playing = false;
+            document.getElementById('playMidi').innerText = "Play MIDI";
+            progressSlider.value = 0;
+            progressSlider.style.display = "none";
+            sendEvent_allNotesOff();
+        }
         // make playbutton unrespondable
         setPlayButtonAcive(false);
         // hide share button
@@ -1296,6 +1314,7 @@ function cleanup() {
     drumInstrument.overriddenNotes = {};
     var midiFileName = document.getElementById("midiFileName");
     midiFileName.innerHTML = "";
+    document.getElementById("midiUrl").value = "";
     var element = document.getElementById("file_controls");
     for (var i = element.childNodes.length - 1; i >= 0; i--) {
         element.childNodes[i].remove();
@@ -1303,13 +1322,23 @@ function cleanup() {
     loadedChannelControlValues = {};
     for (program in availableInstrumentsForProgramChange) {
         // release the preset for the program change
+        console.log("Releasing preset for program change:", program, availableInstrumentsForProgramChange[program]);
         window[availableInstrumentsForProgramChange[program].preset] = null;
         delete availableInstrumentsForProgramChange[program];
     }
     for (note in availableDrumSoundsForNote) {
         // release the drum sound for the note
+        console.log("Releasing drum sound for note:", note, availableDrumSoundsForNote[note]);
         window[availableDrumSoundsForNote[note].preset] = null;
         delete availableDrumSoundsForNote[note];
+    }
+    console.log("left cached instruments:", player.loader.cached);
+    for (let i = player.loader.cached.length - 1; i >= 0; i--) {
+        // release the cached instruments in WebAudioFontPlayer
+        let cachedInstr = player.loader.cached[i];
+        window[cachedInstr] = null;
+        console.log("Releasing cached instrument:", cachedInstr);
+        player.loader.cached.splice(i, 1);
     }
 }
 
@@ -1383,6 +1412,9 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
         select.appendChild(option);
     });
     select.selectedIndex = loadedChannelInstruments[channel].sfIndex;
+    if (select.selectedIndex != sfIndex) {
+        console.warn("Soundfont index mismatch for channel:", channel, "selected:", select.selectedIndex, "sfIndex:", sfIndex);
+    }
     select.onchange = function (event) {
         const select = event.target;
         programNumber = loadedChannelInstruments[channel].programNumber;
