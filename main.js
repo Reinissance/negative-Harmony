@@ -39,7 +39,9 @@ window.onload = function () {
 function moduleLoaded() {
     loader = new heavyModule.AudioLibLoader();
     document.getElementById("transportButton").style.visibility = "visible";
-    document.getElementsByClassName("st-toggle")[0].style.display = "none";
+    const toggler = document.getElementsByClassName("st-toggle")[0];
+    if (toggler)
+        toggler.style.display = "none";
 }
 
 function start() {
