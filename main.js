@@ -39,6 +39,7 @@ window.onload = function () {
 function moduleLoaded() {
     loader = new heavyModule.AudioLibLoader();
     document.getElementById("transportButton").style.visibility = "visible";
+    document.getElementsByClassName("st-toggle")[0].style.display = "none";
 }
 
 function start() {
@@ -1246,9 +1247,10 @@ window.share = function () {
     navigator.clipboard.writeText(shareUrl).then(() => {
         const notification = document.createElement('div');
         notification.innerText = 'Share URL copied to clipboard!';
-        notification.style.position = 'fixed';
+        notification.style.width = 'fit-content';
+        notification.style.left = '10000px'; // hacky: remains in the right corner
         notification.style.bottom = '10px';
-        notification.style.right = '10px';
+        notification.style.position = 'sticky';
         notification.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
         notification.style.color = 'white';
         notification.style.padding = '10px';
