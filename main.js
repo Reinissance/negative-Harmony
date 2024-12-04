@@ -1328,22 +1328,22 @@ function cleanup() {
     loadedChannelControlValues = {};
     for (program in availableInstrumentsForProgramChange) {
         // release the preset for the program change
-        console.log("Releasing preset for program change:", program, availableInstrumentsForProgramChange[program]);
+        // console.log("Releasing preset for program change:", program, availableInstrumentsForProgramChange[program]);
         window[availableInstrumentsForProgramChange[program].preset] = null;
         delete availableInstrumentsForProgramChange[program];
     }
     for (note in availableDrumSoundsForNote) {
         // release the drum sound for the note
-        console.log("Releasing drum sound for note:", note, availableDrumSoundsForNote[note]);
+        // console.log("Releasing drum sound for note:", note, availableDrumSoundsForNote[note]);
         window[availableDrumSoundsForNote[note].preset] = null;
         delete availableDrumSoundsForNote[note];
     }
-    console.log("left cached instruments:", player.loader.cached);
+    // console.log("left cached instruments:", player.loader.cached);
     for (let i = player.loader.cached.length - 1; i >= 0; i--) {
         // release the cached instruments in WebAudioFontPlayer
         let cachedInstr = player.loader.cached[i];
         window[cachedInstr] = null;
-        console.log("Releasing cached instrument:", cachedInstr);
+        // console.log("Releasing cached instrument:", cachedInstr);
         player.loader.cached.splice(i, 1);
     }
 }
@@ -1360,13 +1360,13 @@ function cleanCashed () {
             inUse.push(availableDrumSoundsForNote[note].preset);
         }
     }
-    console.log("presets inUse:", inUse);
+    // console.log("presets inUse:", inUse);
     for (let i = player.loader.cached.length - 1; i >= 0; i--) {
         // release the cached instruments in WebAudioFontPlayer
         let cachedInstr = player.loader.cached[i];
         if (!inUse.includes(cachedInstr)) {
             window[cachedInstr] = null;
-            console.log("Releasing cached instrument:", cachedInstr);
+            // console.log("Releasing cached instrument:", cachedInstr);
             player.loader.cached.splice(i, 1);
         }
     }
