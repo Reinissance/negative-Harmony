@@ -6,7 +6,6 @@ let midiOutputsSelect = null;
 let midiInputs = [];
 let bpm = 120;
 let speed = 1.0;
-let speedSlider = null;
 let player = null;
 
 let loadedChannelInstruments = {}; // Store necessary instruments for midi file playback
@@ -30,7 +29,6 @@ window.onload = function () {
     heavy_Module().then(loadedModule => {
         heavyModule = loadedModule;
         moduleLoaded();
-        speedSlider = document.getElementById("speedControl");
         setupMidiPlayer();
     });
     document.getElementById("transportButton").style.visibility = "hidden";
@@ -218,7 +216,7 @@ function onMidiOutMessage(message) {
     else {
         //webaudiofont
         if (noMidi || (midiOutputsSelect != null && midiOutputsSelect.selectedIndex === 0)) {
-            channel = message[0] & 0x0F;
+            let channel = message[0] & 0x0F;
             if (message[0] >= 0x80 && message[0] < 0x90 && channel != 9) {
                 // Note off
                 handleNoteOff(channel, {
@@ -251,6 +249,7 @@ function onMidiOutMessage(message) {
                 } else if (message[1] === 10) {
                     // Pan
                     handleControlSettingFromFile(channel, "pan", (message[2] - 64) / 64);
+                    // console.log("Pan change:", message[2], "on channel:", channel);
                 } else if (message[1] === 91) {
                     // Reverb send
                     handleControlSettingFromFile(channel, "reverb", message[2] / 127);
@@ -275,12 +274,14 @@ function onMidiOutMessage(message) {
                         // no programchange on drum channel
                     } else {
                         var select = setResettable(channel, "instrumentSelect_" + channel, message[1], "select");
-                        if (select === null || userSettings[channel] === undefined || userSettings[channel][select.id] === undefined) {
+                        if (select === null || (userSettings.channels[channel] != undefined && userSettings.channels[channel][select.id])) {
+                            console.warn("PROGRAM usersetting overrides channel:", channel, "setting:", "instrumentSelect_" + channel, "value:", message[1], select, userSettings);
                             return; // override by shared url settings
                         } else {
                             // console.log("setting instrument from FILE for channel:", channel, "to:", message[1], userSettings);
-                            loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[message[1]].preset;
+                            // loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[message[1]].preset;
                             select.selectedIndex = message[1];
+                            select.classList.add("fromFile"); // to avoid setting the userSettings
                             select.dispatchEvent(new Event('change'));
                         }
                     };
@@ -331,23 +332,31 @@ function setResettable (channel, setting, value, type) {
 
 function handleControlSettingFromFile(channel, setting, value) {
 
-    var slider = setResettable(channel, setting, value, "slider");
-
     Tone.Draw.schedule(function (time) {
+        var slider = setResettable(channel, setting, value, "slider");
         
-        if (slider === null || userSettings[channel] === undefined || userSettings[channel][slider.id] === undefined) {
+        if (slider === null || (userSettings.channels[channel] != undefined && userSettings.channels[channel][slider.id])) {
+            console.warn("usersetting overrides channel:", channel, "setting:", setting, "value:", value, slider, userSettings);
             return; // override by shared url settings
         }
         if (channel === 9) {
-            drumInstrument.gainNode.gain.value = value;
+            var controlNode = (setting === "volume") ? drumInstrument.gainNode.gain : drumInstrument.panNode.pan;
+            controlNode.value = value;
             // console.log("Volume change:", message[2], "on DRUMchannel");
         } else {
             // console.log("Volume change:", message[2], "on channel:", channel);
-            loadedChannelInstruments[channel].gainNode.gain.value = value;
+            var controlNode = (setting === "volume") ? loadedChannelInstruments[channel].gainNode.gain : (setting === "pan") ? loadedChannelInstruments[channel].panNode.pan : loadedChannelInstruments[channel].reverbSendGainNode.gain;
+            controlNode.value = value;
         }
-        slider.value = message[2];
-        var v_label = document.getElementById(setting.substring(0, 3) + "_label_" + channel);
-        v_label.innerHTML = setting.charAt(0).toUpperCase() + setting.slice(1) + ": " + value.toFixed(2);
+        slider.value = (setting === "pan") ? value : value * 127;
+        let labelId = setting + "_label_" + ((channel != 9) ? channel : "drum");
+        // console.log("Setting label:", labelId, "to:", value, slider.value);
+        let v_label = document.getElementById(labelId);
+        if (v_label) {
+            v_label.innerHTML = setting.charAt(0).toUpperCase() + setting.slice(1) + ": " +  value.toFixed(2);
+        } else {
+            console.warn("No label found for:", labelId, );
+        }
     }, Tone.now());
 }
 
@@ -444,7 +453,6 @@ function checkForParamsInUrl() {
             .then(response => response.arrayBuffer())
             .then(data => {
                 midiData = new Midi(data);
-                document.getElementById("file_controls").innerHTML = "";
                 parseMidiFile();
 
                 // paste the midi file url into the input field
@@ -515,20 +523,7 @@ function checkForParamsInUrl() {
                                 // speed needs to be set after the channel settings for some reason
                                 updateUserSettings("speed", speedParam, -1);
                                 speed = parseFloat(userSettings.speed);
-                                speedSlider.value = speed;
-                                const label = document.querySelector('label[for="speedControl"]');
-                                const speedBPM = (bpm * speed).toFixed(2);
-                                // console.log("BPM from MIDI file:", bpm, "SPEED:", speed, "RESULT:", speedBPM);
-                                Tone.Transport.bpm.value = speedBPM;
-                                if (label) {
-                                    label.textContent = "Playback Speed: " + speedBPM + "bpm";
-                                }
-                            }
-
-                            // Load an impulse response for the convolution reverb if not in user settings
-                            if (userSettings.irUrl === undefined) {
-                                // console.log("Loading default impulse response...");
-                                setIR('182806__unfa__ir-02-gunshot-in-a-chapel-mixed');
+                                setSpeed(speed);
                             }
 
                             // GO!
@@ -551,6 +546,12 @@ function checkForParamsInUrl() {
             console.log("loading default: piano");
             loadInstrumentsForProgramChange(0, 0, 0, "Piano");
         }
+    }
+
+    // Load an impulse response for the convolution reverb if not in user settings
+    if (userSettings.irUrl === undefined) {
+        // console.log("Loading default impulse response...");
+        setIR('182806__unfa__ir-02-gunshot-in-a-chapel-mixed');
     }
 }
 
@@ -589,32 +590,48 @@ function updateSlider_perOktave(value) {
     updateUserSettings("perOktave", value, -1);
 }
 
-function parseMidiFile() {
-    console.log(midiData);
-
-    // reset speed and speed slider to 1
-    speedSlider.value = 1.0;
-    speed = 1.0;
-
+function setSpeed(value) {
+    // bpm = bpm / speed;
+    speed = value;
+    Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
     const label = document.querySelector('label[for="speedControl"]');
-    //Get bpm from midi file if present
-    if (midiData.header.tempos.length > 0) {
-        bpm = midiData.header.tempos[0]["bpm"];
-        const speedBPM = (bpm * speed).toFixed(2);
-        // console.log("BPM from MIDI file:", bpm, "SPEED:", speed, "RESULT:", speedBPM);
-        Tone.Transport.bpm.value = speedBPM;
-        if (label) {
-            label.textContent = "Playback Speed: " + speedBPM + "bpm";
+    if (label) {
+        label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + " BPM";
+    }
+
+    const speedSlider = document.getElementById("speedControl");
+    speedSlider.value = speed;
+    const resetBtn = document.getElementById("resetSpeed");
+    if (speed === 1.0) {
+        if (resetBtn) {
+            resetBtn.style.display = "none";
         }
     }
     else {
-        // console.log("No BPM found in MIDI file. Defaulting to 120 bpm.");
-        Tone.Transport.bpm.value = 120; // Default to 120 bpm
-        speedSlider.label = "Speed: 120bpm";
-        if (label) {
-            label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
+        // console.log("Setting speed to:", speed, resetBtn);
+        if (resetBtn) {
+            resetBtn.style.display = "block";
         }
     }
+}
+
+function parseMidiFile() {
+    document.getElementById("file_controls").innerHTML = "";
+    console.log(midiData);
+
+    // reset speed
+    speed = 1.0;
+    //Get bpm from midi file if present
+    if (midiData.header.tempos.length > 0) {
+        bpm = midiData.header.tempos[0]["bpm"];
+        // console.log("Tempo found in MIDI file:", midiData.header.tempos[0]["bpm"]);
+    }
+    else {
+        bpm = 120.0;
+        // console.log("No tempo found in MIDI file. Setting to default 120 bpm.");
+    }
+    setSpeed(1.0);
+    // console.log("BPM:", bpm);
     if (midiData.header.name) {
         document.getElementById("midiFileName").innerHTML = midiData.header.name;
     }
@@ -624,6 +641,7 @@ function parseMidiFile() {
 
     // Schedule the events - creates parts for each channel
     scheduleMIDIEvents(midiData);
+    // console.log("MIDI file parsed and scheduled, BPM:", bpm);
 }
 
 function reloadPageWithUrl() {
@@ -710,7 +728,7 @@ function setupMidiPlayer() {
         // Set timeSignature
         if (midi.header.timeSignatures.length > 0) {
             const timeSignature = midi.header.timeSignatures[0];
-            console.log("Time Signature:", timeSignature.timeSignature);
+            // console.log("Time Signature:", timeSignature.timeSignature);
             Tone.Transport.timeSignature = timeSignature.timeSignature;
         }
 
@@ -766,18 +784,13 @@ function setupMidiPlayer() {
                 if (channel != 9 && channel >= 0) {
                     // preload the instruments for the program change and setup mixer channels
                     loadInstrumentsForProgramChange(channel, programChange, 0, track.name);
-                    // if (fileSettings[channel] === undefined) {
-                        var select = setResettable(channel, "instrumentSelect_" + channel, programChange, "select");
-                        // console.log("setting resetter from FILE for channel:", channel, "to:", programChange, userSettings);
-                    // }
                 }
-                if (programChange >= 0) {
-                    channelParts[channel].add(0, {
-                        type: 'programChange',
-                        number: programChange,
-                        channel: channel
-                    });
-                }
+                const programChangeTime = track.notes.length > 0 ? track.notes[0].time : 0;
+                channelParts[channel].add(programChangeTime, {
+                    type: 'programChange',
+                    number: track.instrument.number,
+                    channel: channel
+                });
                 if (channel === 9) {
                     track.notes.forEach(note => {
                         if (!availableDrumSoundsForNote[note.midi]) {
@@ -863,11 +876,14 @@ function setupMidiPlayer() {
                     case 'tempo':
                         // Tone.Transport.bpm.rampTo(event.bpm * speed, 0.1);
                         Tone.Draw.schedule(function (time) {
+                            // bpm = event.bpm;
                             const label = document.querySelector('label[for="speedControl"]');
                             if (label) {
-                                label.textContent = "Playback Speed: " + (event.bpm * speed).toFixed(2) + "bpm";
+                                label.textContent = "Playback Speed: " + (event.bpm * speed).toFixed(2) + " BPM";
                             }
-                        }, "+0.01");
+                        }, Tone.now());
+                        // Tone.Transport.bpm.value = (event.bpm * speed).toFixed(2);
+                        // bpm = event.bpm;
                         break;
                 }
             };
@@ -934,12 +950,7 @@ function setupMidiPlayer() {
 
     // Control playback speed with a range input
     document.getElementById('speedControl').addEventListener('input', function (event) {
-        speed = parseFloat(event.target.value);
-        Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
-        const label = document.querySelector('label[for="speedControl"]');
-        if (label) {
-            label.textContent = "Playback Speed: " + (bpm * speed).toFixed(2) + "bpm";
-        }
+        setSpeed(parseFloat(event.target.value));
         updateUserSettings("speed", speed, -1);
     });
 }
@@ -1318,8 +1329,10 @@ function cleanup() {
     fileSettings = {};
     lastNotes = [];
     loadedChannelInstruments = {};
-    drumInstrument.notes = {};
-    drumInstrument.overriddenNotes = {};
+    if (drumInstrument) {
+        drumInstrument.notes = {};
+        drumInstrument.overriddenNotes = {};
+    }
     var midiFileName = document.getElementById("midiFileName");
     midiFileName.innerHTML = "";
     document.getElementById("midiUrl").value = "";
@@ -1425,7 +1438,12 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
         availableInstrumentsForProgramChange[event.target.selectedIndex].preset = "_tone_" + preset;
         loadedChannelInstruments[channel].preset = "_tone_" + preset;
         loadedChannelInstruments[channel].programNumber = event.target.selectedIndex;
-        updateUserSettings(event.target.id, event.target.value, channel);
+        if (!event.target.classList.contains("fromFile")) {
+            updateUserSettings(event.target.id, event.target.value, channel);
+        } else {
+            // remove "fromFile" class
+            event.target.classList.remove("fromFile");
+        }
         // console.log('INSTRUMENT Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange[event.target.selectedIndex], "channelInsts:", loadedChannelInstruments[channel], channel);
     };
     controlDiv.appendChild(instSelect);
