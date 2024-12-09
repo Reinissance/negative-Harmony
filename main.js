@@ -14,10 +14,10 @@ let drumInstrument = null; // Create a separate instrument for drum sounds
 let availableDrumSoundsForNote = {};  // Store available drum sounds per note provided by webaudiofont
 let midiNotes = []; // Store the notes played by the midi player to stop them on note off
 let loadedChannelControlValues = {}; // on midiFile load, store the control values for each channel
-let noMidi = true; // Flag to check if no MIDI devices are available
+let noMidi = true; // Flag to check if other MIDI devices are available
 let lastNotes = []; // Store the last notes played by the midi player to check the piece's key
 let midiData; // the read midi file
-let normal = false; // for pitchbend to be possibly turned upside down if not normal
+let normal = false; // for pitchbend to be possibly turned upside down if not in normal mode
 let sustain = {}; // notes that are sustained
 let sustainedNodes = {}; // nodes that are sustained
 let userSettings = { "channels": {} }; // Store user settings for or from shared via URL
