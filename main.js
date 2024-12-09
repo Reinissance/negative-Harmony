@@ -275,9 +275,9 @@ function onMidiOutMessage(message) {
                     } else {
                         var select = setResettable(channel, "instrumentSelect_" + channel, message[1], "select");
                         if (select === null || (userSettings.channels[channel] != undefined && userSettings.channels[channel][select.id])) {
-                            console.warn("PROGRAM usersetting overrides channel:", channel, "setting:", "instrumentSelect_" + channel, "value:", message[1], select, userSettings);
+                            console.warn("PROGRAM usersetting overrides channel:", channel, "setting:", "instrumentSelect_" + channel, "value:", message[1]);
                             return; // override by shared url settings
-                        } else {
+                        } else if (select.selectedIndex != message[1]) {
                             // console.log("setting instrument from FILE for channel:", channel, "to:", message[1], userSettings);
                             // loadedChannelInstruments[channel].preset = availableInstrumentsForProgramChange[message[1]].preset;
                             select.selectedIndex = message[1];
@@ -336,7 +336,7 @@ function handleControlSettingFromFile(channel, setting, value) {
         var slider = setResettable(channel, setting, value, "slider");
         
         if (slider === null || (userSettings.channels[channel] != undefined && userSettings.channels[channel][slider.id])) {
-            console.warn("usersetting overrides channel:", channel, "setting:", setting, "value:", value, slider, userSettings);
+            console.warn("usersetting overrides channel:", channel, "setting:", setting, "value:", value);
             return; // override by shared url settings
         }
         if (channel === 9) {
@@ -412,13 +412,14 @@ function checkForParamsInUrl() {
     }
     const negRootParam = urlParams.get('negRoot');
     if (negRootParam) {
-        updateSlider_negRoot(parseFloat(negRootParam));
+        // updateSlider_negRoot(parseFloat(negRootParam));
         const negRootSelect = document.getElementById("parameter_negRoot");
         
         // find the options value that matches the lowest note        
         for (const option of negRootSelect.options) {
+            // console.log("NEGROOT option:", option.value, parseInt(option.value) % 12, negRootParam % 12);
             if (parseInt(option.value) % 12 === negRootParam % 12) {
-                negRootSelect.selectedIndex = negRootParam % 12;
+                negRootSelect.selectedIndex = option.index;
                 updateSlider_negRoot(parseInt(option.value));
                 break;
             }
@@ -571,6 +572,7 @@ function updateSlider_mode(value) {
 }
 
 function updateSlider_negRoot(value) {
+    console.log("Setting negRoot to:", value);
     if (loader.webAudioWorklet) {
         loader.sendFloatParameterToWorklet("negRoot", value);
     } else {
@@ -1433,7 +1435,6 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
             option.text = name;
             select.appendChild(option);
         });
-        select.selectedIndex = 0;
         preset = availableInstrumentsForProgramChange[event.target.selectedIndex]["urls"][0];
         availableInstrumentsForProgramChange[event.target.selectedIndex].preset = "_tone_" + preset;
         loadedChannelInstruments[channel].preset = "_tone_" + preset;
