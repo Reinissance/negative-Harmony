@@ -474,7 +474,7 @@ function checkForParamsInUrl() {
                             userSettings.channels = JSON.parse(decodeURIComponent(channelsParam));
                             // loop through the channels and set the values
                             for (const channel in userSettings.channels) {
-                                const channelSettings = { ...userSettings.channels[channel] };
+                                let channelSettings = { ...userSettings.channels[channel] };
                                 function setSelect(element, index, setting) {
                                     if (setting.includes("Change")) {
                                         // drum notes have to match midi notes
@@ -496,20 +496,22 @@ function checkForParamsInUrl() {
                                 }
                                 // very dirty: after setting the select elements, which loads the soundfonts, we set the sliders
                                 setTimeout(() => {
-                                    // Now set the sliders
-                                    for (setting in channelSettings) {
+                                    // Now set the sliders and other selects
+                                    for (const setting in channelSettings) {
                                         const value = channelSettings[setting];
                                         var element = document.getElementById(setting);
                                         if (element && element.tagName === 'SELECT') {
                                             element.selectedIndex = value;
                                             element.dispatchEvent(new Event('change'));
                                             // console.log("Setting OTHER SELECT:", setting, "to:", value);
-                                            return;
                                         }
-                                        if (element && element.tagName === 'INPUT' && element.type === 'range') {
+                                        else if (element && element.tagName === 'INPUT' && element.type === 'range') {
                                             element.value = value;
                                             element.dispatchEvent(new Event('input'));
                                             // console.log("Setting SLIDER:", setting, "to:", value);
+                                        }
+                                        else {
+                                            console.error("Setting not found:", setting, "value:", value);
                                         }
                                     }
                                     // show reset button
@@ -1757,7 +1759,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
                 updateUserSettings(event.target.id, index, 9);
             })
             .catch((error) => console.error('Error loading drum sound:', error));
-        updateUserSettings(event.target.id, event.target.value, 9);
+        // updateUserSettings(event.target.id, event.target.value, 9);
     };
     noteSfSelect.classList.add("form-select");
     selectDiv.appendChild(noteSfSelect);
