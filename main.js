@@ -648,13 +648,32 @@ function parseMidiFile() {
     // console.log("MIDI file parsed and scheduled, BPM:", bpm);
 }
 
-function reloadPageWithUrl() {
-    // dirty...
-    const url = document.getElementById("midiUrl").value;
-    if (url) {
-        let newUrl = window.location.pathname + "?midiFile=" + encodeURIComponent(url);
-        window.location.href = newUrl;
-    }
+function reloadWithUrl() {
+    const midiFileUrl = document.getElementById("midiUrl").value;
+    preclean();
+    if (midiFileUrl) {
+        if (!midiFileUrl.endsWith(".mid")) {
+            alert("Please provide a valid MIDI file URL.");
+            return;
+        }
+        fetch(midiFileUrl)
+            .then(response => response.arrayBuffer())
+            .then(data => {
+                midiData = new Midi(data);
+                parseMidiFile();
+
+                // paste the midi file url into the input field
+                document.getElementById("midiUrl").value = midiFileUrl;
+
+                // make share button visible
+                document.getElementById("hiddenShareButton").style.display = "block";
+            })
+            .catch(error => {
+                console.log(error);
+                alert('Error fetching MIDI file: ' + error);
+            });
+        }
+        setPlayButtonAcive(true);
 }
 
 function setupMidiPlayer() {
@@ -663,8 +682,9 @@ function setupMidiPlayer() {
     var playing = false;
     let parts = []; // Store the scheduled MIDI parts
 
-    // Handle MIDI file upload
-    document.getElementById('midiUpload').addEventListener('change', (event) => {
+
+
+    window.preclean = function() {
         if (playing) {
             // console.log("Stopping playback...");
             Tone.Transport.stop();
@@ -687,6 +707,11 @@ function setupMidiPlayer() {
         if (midiData) {
             cleanup();
         }
+    }
+
+    // Handle MIDI file upload
+    document.getElementById('midiUpload').addEventListener('change', (event) => {
+        preclean();
 
         // console.log("Loading MIDI file...");
         const file = event.target.files[0];

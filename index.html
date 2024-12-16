@@ -67,8 +67,8 @@
               <h3>Midi-Player</h3>
               <p><em>Upload a local file:</em></p>
               <input type="file" id="midiUpload" class="form-control" accept=".mid" style="margin-bottom: 10px;" />
-              <p><em>...or try to paste an url here:<br>(e.g. from <a data-toggle="tooltip" href="https://bitmidi.com/" target="_blank" title="Thousands of MidiFiles from Classic over Rock/Pop until Jazz">bitmidi</a>, <a data-toggle="tooltip" href="https://www.mfiles.co.uk/midi-files.htm" target="_blank" title="Classical MidiFiles">mfiles</a> or <a data-toggle="tooltip" target="_blank"href="https://midikaos.mnstrl.org/" title="International folk music">Midikaos</a>,<br>then hit enter to submit.)</em></p>
-              <input type="text" id="midiUrl" style="margin-bottom: 10px; top: 172px; position: sticky;" class="form-control" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadPageWithUrl()"/>
+              <p><em>...or try to paste an url here:<br>(e.g. from <a data-toggle="tooltip" href="https://bitmidi.com/" target="_blank" title="Thousands of MidiFiles from Classic over Rock/Pop until Jazz">bitmidi</a>, <a data-toggle="tooltip" href="https://www.mfiles.co.uk/midi-files.htm" target="_blank" title="Classical MidiFiles">mfiles</a> or <a data-toggle="tooltip" target="_blank"href="https://midikaos.mnstrl.org/" title="International folk music">Midikaos</a>).</em></p>
+              <div style="display: flex; align-items: center; margin-bottom: 10px; top: 172px; position: sticky;""><input type="text" id="midiUrl" style="margin-right: 10px;" class="form-control" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadWithUrl()"/><button class="btn btn-outline-secondary" onclick="reloadWithUrl()">load</button></button></div>
               <button class="btn btn-outline-warning" id="resetSpeed" style="margin-bottom: 10px; display: none;" onclick="setSpeed(1.0)">reset speed to file</button>
               <label for="speedControl">Playback Speed: </label>
               <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" class="form-range"/>
