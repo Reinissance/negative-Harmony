@@ -15,6 +15,7 @@
     color: black;
     text-shadow: 0 0 15px black;
     color: rgba(255, 255, 255, 0.811);
+    background-color: black;
   }
 
   .boxed {
@@ -64,7 +65,7 @@
   }
 
   a {
-    color: #ff00cc;
+    color: #2ee400;
     text-shadow: 0 0 10px black;
   }
 
@@ -72,9 +73,21 @@
     text-align: right;
   }
 
-  .form-control, .form-select, .accordion-button {
+  .form-control, .form-select, .accordion-button .white-btn {
     background-color: #ffffff87;
     color: white;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    background: orange;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    background: orange;
+  }
+
+  input[type="range"]::-ms-thumb {
+    background: orange;
   }
 
   .accordion-item {
