@@ -16,7 +16,8 @@ let midiNotes = []; // Store the notes played by the midi player to stop them on
 let loadedChannelControlValues = {}; // on midiFile load, store the control values for each channel
 let noMidi = true; // Flag to check if other MIDI devices are available
 let lastNotes = []; // Store the last notes played by the midi player to check the piece's key
-let midiData; // the read midi file
+let midiFileRead; // bool if midi file is read
+let track_duration = 0;
 let normal = false; // for pitchbend to be possibly turned upside down if not in normal mode
 let sustain = {}; // notes that are sustained
 let sustainedNodes = {}; // nodes that are sustained
@@ -24,6 +25,7 @@ let userSettings = { "channels": {} }; // Store user settings for or from shared
 let fileSettings = {}; // Store the settings from the loaded MIDI file
 let audioContext = null; // Create an audio context
 let soloChannels = []; // Store the soloed channels
+let reversedPlayback = false; // Flag to check if the midi file should be played in reverse
 
 window.onload = function () {
     heavy_Module().then(loadedModule => {
@@ -397,18 +399,17 @@ function checkForParamsInUrl() {
     const urlParams = new URLSearchParams(window.location.search);
     // console.log("URL params:", urlParams);
     // first the global settings
+    const reversed = urlParams.get('reversedPlayback');
+    if (reversed) {
+        reversedPlayback = (reversed === "true") ? true : false;
+        var reverseCheckbox = document.getElementById("reverseMidi");
+        reverseCheckbox.checked = reversedPlayback;
+    }
     const modeParam = urlParams.get('mode');
     if (modeParam) {
         updateSlider_mode(parseInt(modeParam));
         // set the mode radio button
-        const modeRadios = document.getElementsByName("mode");
-        for (const radio of modeRadios) {
-            if (parseInt(radio.value) === parseInt(modeParam)) {
-                radio.checked = true;
-            } else {
-                radio.checked = false;
-            }
-        }
+        document.getElementById("parameter_mode").selectedIndex = parseInt(modeParam);
     }
     const negRootParam = urlParams.get('negRoot');
     if (negRootParam) {
@@ -439,6 +440,10 @@ function checkForParamsInUrl() {
         var reverbSelect = document.getElementById("reverbSelect");
         setIR(reverbSelect.options[index].value);
         reverbSelect.selectedIndex = index;
+    } else {
+        // Load default impulse response for the convolution reverb if not in user settings
+        setIR('182806__unfa__ir-02-gunshot-in-a-chapel-mixed');
+        // console.log("Loading default impulse response...");
     }
     const reverbGainParam = urlParams.get('reverbGain');
     if (reverbGainParam) {
@@ -453,8 +458,7 @@ function checkForParamsInUrl() {
         fetch(midiFileUrl)
             .then(response => response.arrayBuffer())
             .then(data => {
-                midiData = new Midi(data);
-                parseMidiFile();
+                parseMidiFile(new Midi(data));
 
                 // paste the midi file url into the input field
                 document.getElementById("midiUrl").value = midiFileUrl;
@@ -520,7 +524,7 @@ function checkForParamsInUrl() {
                                     if (resetBtn) {
                                         resetBtn.style.display = "block";
                                     }
-                                }, 800);
+                                }, 1000);
                             }
                             if (speedParam) {
                                 // speed needs to be set after the channel settings for some reason
@@ -532,7 +536,7 @@ function checkForParamsInUrl() {
                             // GO!
                             setPlayButtonAcive(true);
                         }
-                    }, 800);
+                    }, 1000);
                 } else {
                     setPlayButtonAcive(true);
                 }
@@ -549,12 +553,6 @@ function checkForParamsInUrl() {
             console.log("loading default: piano");
             loadInstrumentsForProgramChange(0, 0, 0, "Piano");
         }
-    }
-
-    // Load an impulse response for the convolution reverb if not in user settings
-    if (userSettings.irUrl === undefined) {
-        // console.log("Loading default impulse response...");
-        setIR('182806__unfa__ir-02-gunshot-in-a-chapel-mixed');
     }
 }
 
@@ -619,13 +617,15 @@ function setSpeed(value) {
     }
 }
 
-function parseMidiFile() {
+function parseMidiFile(midiData) {
     document.getElementById("file_controls").innerHTML = "";
     console.log(midiData);
+    midiFileRead = true;
+    track_duration = midiData.duration;
 
     // reset speed
     speed = 1.0;
-    //Get bpm from midi file if present
+    // Get bpm from midi file if present
     if (midiData.header.tempos.length > 0) {
         bpm = midiData.header.tempos[0]["bpm"];
         // console.log("Tempo found in MIDI file:", midiData.header.tempos[0]["bpm"]);
@@ -684,7 +684,7 @@ function setupMidiPlayer() {
             shares.style.display = "none";
         }
 
-        if (midiData) {
+        if (midiFileRead) {
             cleanup();
         }
 
@@ -693,10 +693,8 @@ function setupMidiPlayer() {
         if (file) {
             const reader = new FileReader();
             reader.onload = function (e) {
-                const midi = new Midi(e.target.result);
-                midiData = midi; // Store parsed MIDI data
                 userSettings = { "channels": {} }; // Reset user settings
-                parseMidiFile();
+                parseMidiFile(new Midi(e.target.result));
                 setPlayButtonAcive(true);
             };
             reader.readAsArrayBuffer(file);
@@ -724,7 +722,13 @@ function setupMidiPlayer() {
                 }
                 channelParts[0].add(tempo.time, {
                     type: 'tempo',
-                    bpm: tempo.bpm
+                    bpm: tempo.bpm,
+                    reversed: false
+                });
+                channelParts[0].add(track_duration - tempo.time, {
+                    type: 'tempo',
+                    bpm: tempo.bpm,
+                    reversed: true
                 });
             });
         }
@@ -737,6 +741,7 @@ function setupMidiPlayer() {
         }
 
         let lastPC = 0;
+        
 
         // Loop through each track in the MIDI file
         midi.tracks.forEach((track, trackIndex) => {
@@ -752,18 +757,28 @@ function setupMidiPlayer() {
 
             // Schedule note events
             track.notes.forEach(note => {
-                channelParts[channel].add(note.time, {
+                const velocity = (channel === 9) ? Math.floor(note.velocity * 127) : Math.floor(Math.pow(note.velocity, 2) * 127);
+                const noteEvent = {
                     type: 'note',
                     midi: note.midi,
                     duration: note.duration,
-                    velocity: (channel === 9) ? Math.floor(note.velocity * 127) : Math.floor(Math.pow(note.velocity, 2) * 127),
+                    velocity: velocity,
                     channel: channel,
-                    length: note.time + note.duration
-                });
+                    reversed: false
+                };
+                const reversedNoteEvent = {
+                    ...noteEvent,
+                    reversed: true
+                };
+                channelParts[channel].add(note.time, noteEvent);
+                const note_length = (note.duration <= Tone.Time("4n").toSeconds()) ? note.time : (note.time + ((channel != 9) ? note.duration : 0)); // drums duration ignored for reversed notes, else start notes at noteoff if greater than quarters.
+                const revTime = track_duration - note_length;
+                channelParts[channel].add(revTime, reversedNoteEvent);
             });
 
             // Schedule control change events
             Object.values(track.controlChanges).forEach(controlChange => {
+                let nextCCtime = 0;
                 controlChange.forEach(cc => {
                     // add the first to loadedChannelControlValues in order to have a starting value for the controls
                     if (!loadedChannelControlValues[channel]) {
@@ -776,8 +791,17 @@ function setupMidiPlayer() {
                         type: 'controlChange',
                         number: cc.number,
                         value: cc.value,
-                        channel: channel
+                        channel: channel,
+                        reversed: false
                     });
+                    channelParts[channel].add(track_duration - nextCCtime, {
+                        type: 'controlChange',
+                        number: cc.number,
+                        value: cc.value,
+                        channel: channel,
+                        reversed: true
+                    });
+                    nextCCtime = cc.time;
                 });
             });
 
@@ -793,7 +817,14 @@ function setupMidiPlayer() {
                 channelParts[channel].add(programChangeTime, {
                     type: 'programChange',
                     number: track.instrument.number,
-                    channel: channel
+                    channel: channel,
+                    reversed: false
+                });
+                channelParts[channel].add(track_duration - programChangeTime, {
+                    type: 'programChange',
+                    number: track.instrument.number,
+                    channel: channel,
+                    reversed: true
                 });
                 if (channel === 9) {
                     track.notes.forEach(note => {
@@ -811,7 +842,14 @@ function setupMidiPlayer() {
                     channelParts[channel].add(bend.time, {
                         type: 'pitchBend',
                         value: (bend.value + 1) * 8192, //pd bendin takes values from 0 to 16383
-                        channel: channel
+                        channel: channel,
+                        reversed: false
+                    });
+                    channelParts[channel].add(track_duration - bend.time, {
+                        type: 'pitchBend',
+                        value: (bend.value + 1) * 8192, //pd bendin takes values from 0 to 16383
+                        channel: channel,
+                        reversed: true
                     });
                     // console.log("Pitch bend:", bend, "on channel:", channel);
                 });
@@ -821,12 +859,16 @@ function setupMidiPlayer() {
                 // Store the last notes played by the midi player to check the piece's key
                 if (track.notes.length > 0 && channel != 9) {
                     const lastNote = track.notes[track.notes.length - 1].midi;
+                    if (lastNotes.length && lastNote.time > lastNotes[(lastNotes.length - 1)].time) {
+                        // clear the array if the last note is played later than the last note in the array
+                        lastNotes = [];
+                    }
                     if (!lastNotes.includes(lastNote)) {
                         lastNotes.push(lastNote);
                     }
                 }
             }
-            //end of looping track
+            //end of looping trackchannels
         });
 
         // Check the piece's key
@@ -849,51 +891,67 @@ function setupMidiPlayer() {
         // Start all parts
         Object.values(channelParts).forEach(part => {
             part.callback = (time, event) => {
-                switch (event.type) {
-                    case 'note':
-                        onMIDIMessage({
-                            data: [0x90 + event.channel, event.midi, event.velocity]
-                        });
-                        const noteOffTime = event.length / speed;
-                        Tone.Transport.schedule((releaseTime) => {
-                            onMIDIMessage({
-                                data: [0x80 + event.channel, event.midi, 0]
-                            });
-                            // console.log("Note off:", event.midi, "at time:", releaseTime);
-                        }, noteOffTime);
-                        break;
-                    case 'controlChange':
-                        onMIDIMessage({
-                            data: [0xB0 + event.channel, event.number, Math.floor(event.value * 127)]
-                        });
-                        break;
-                    case 'programChange':
-                        onMIDIMessage({
-                            data: [0xC0 + event.channel, event.number]
-                        });
-                        break;
-                    case 'pitchBend':
-                        onMIDIMessage({
-                            data: [0xE0 + event.channel, event.value & 0x7F, event.value >> 7]
-                        });
-                        break;
-                    case 'tempo':
-                        // Tone.Transport.bpm.rampTo(event.bpm * speed, 0.1);
-                        Tone.Draw.schedule(function (time) {
-                            // bpm = event.bpm;
-                            const label = document.querySelector('label[for="speedControl"]');
-                            if (label) {
-                                label.textContent = "Playback Speed: " + (event.bpm * speed).toFixed(2) + " BPM";
-                            }
-                        }, Tone.now());
-                        // Tone.Transport.bpm.value = (event.bpm * speed).toFixed(2);
-                        // bpm = event.bpm;
-                        break;
-                }
+                fireMidiEvent(event, time);
             };
-            part.start();
+            part.start(Tone.now());
             parts.push(part);
         });
+    }
+    
+    document.getElementById('reverseMidi').addEventListener('click', (event) => {
+        if (reversedPlayback === event.target.checked) {
+            return;
+        }
+        reversedPlayback = event.target.checked;
+        const position = track_duration / speed - Tone.Transport.seconds;
+        Tone.Transport.seconds = position;
+        updateUserSettings("reversedPlayback", reversedPlayback, -1);
+        setTimeout(() => {
+            sendEvent_allNotesOff();
+        }, 300);
+    });
+
+    function fireMidiEvent(event, time) {
+        // console.log("Firing MIDI event:", event, "at time:", time);
+        if (event.reversed != reversedPlayback) {
+            return;
+        }
+        switch (event.type) {
+        case 'note':
+            onMIDIMessage({
+                data: [0x90 + event.channel, event.midi, event.velocity]
+            });
+            const noteOffTime = Tone.Transport.seconds + event.duration / speed;
+            Tone.Transport.schedule((releaseTime) => {
+                onMIDIMessage({
+                    data: [0x80 + event.channel, event.midi, 0]
+                });
+            }, noteOffTime);
+            break;
+        case 'controlChange':
+            onMIDIMessage({
+                data: [0xB0 + event.channel, event.number, Math.floor(event.value * 127)]
+            });
+            break;
+        case 'programChange':
+            onMIDIMessage({
+                data: [0xC0 + event.channel, event.number]
+            });
+            break;
+        case 'pitchBend':
+            onMIDIMessage({
+                data: [0xE0 + event.channel, event.value & 0x7F, event.value >> 7]
+            });
+            break;
+        case 'tempo':
+            Tone.Draw.schedule(function (time) {
+                const label = document.querySelector('label[for="speedControl"]');
+                if (label) {
+                    label.textContent = "Playback Speed: " + (event.bpm * speed).toFixed(2) + " BPM";
+                }
+            }, Tone.now());
+            break;
+        }
     }
 
     const progressSlider = document.getElementById('progress-input');
@@ -902,30 +960,44 @@ function setupMidiPlayer() {
     document.getElementById('playMidi').addEventListener('click', () => {
         var playBtn = document.getElementById('playMidi');
         if (!playing) {
-            if (midiData) {
+            if (midiFileRead) {
                 playBtn.innerText = "Stop Playback";
                 playing = true;
+                Tone.Transport.position = 0;
+                startTime = Tone.now();
                 Tone.Transport.start();
                 progressSlider.style.display = "block";
 
-                // Update the progress slider during playback
-                Tone.Transport.scheduleRepeat((time) => {
-                    if (playing) {
-                        const progress = (Tone.Transport.seconds / (midiData.duration / speed)) * 100;
-                        progressSlider.value = progress;
+                // Clear any existing scheduled events
+                Tone.Transport.clear();
 
-                        if (progress >= 100) {
+                // Clear any existing scheduled repeat events
+                if (Tone.Transport._scheduledRepeatId) {
+                    Tone.Transport.clear(Tone.Transport._scheduledRepeatId);
+                }
+
+                // Update the progress slider during playback
+                Tone.Transport._scheduledRepeatId = Tone.Transport.scheduleRepeat((time) => {
+                    if (playing) {
+                        const position = Tone.Transport.seconds;
+                        const progress = ((reversedPlayback ? (track_duration / speed) - position : position) / (track_duration / speed)) * 100;
+                        progressSlider.value = progress;
+                        // console.log("POSITION (seconds):", Tone.Transport.seconds, " / ", track_duration / speed, Tone.Transport.position, "PROGRESS:", progress);
+
+                        if ((!reversedPlayback && progress >= 100) || (reversedPlayback && progress <= 0)) {
                             // console.log("Stopping playback...");
                             playBtn.innerText = "Play MIDI";
-                            playing = false;
-                            Tone.Transport.stop(time);
-                            Tone.Transport.position = 0;
-                            progressSlider.value = 0;
+                            setTimeout(() => {
+                                playing = false;
+                                Tone.Transport.stop(time);
+                                Tone.Transport.position = 0;
+                                progressSlider.value = 0;
+                            }, 200);
                             progressSlider.style.display = "none";
                             sendEvent_allNotesOff();
                         }
                     }
-                }, "0.1");
+                }, "4n");
             } else {
                 alert("Please upload a MIDI file or paste a url to a file first.");
                 console.error("No MIDI file loaded or parsed.");
@@ -945,8 +1017,8 @@ function setupMidiPlayer() {
     });
 
     progressSlider.oninput = function (event) {
-        const position = (event.target.value / 100) * (midiData.duration / speed);
-        Tone.Transport.seconds = position;
+        const position = (event.target.value / 100) * (track_duration / speed);
+        Tone.Transport.seconds = reversedPlayback ? (track_duration / speed) - position : position;
         setTimeout(() => {
             sendEvent_allNotesOff(); // sometimes some notes are hanging after transport stop
         }, 300);
@@ -956,6 +1028,10 @@ function setupMidiPlayer() {
     document.getElementById('speedControl').addEventListener('input', function (event) {
         setSpeed(parseFloat(event.target.value));
         updateUserSettings("speed", speed, -1);
+    });
+
+    document.getElementById("midiUrl").addEventListener('click', function (event) {
+        event.target.select();
     });
 }
 
@@ -1221,7 +1297,7 @@ function setupGMPlayer() {
                 reverb.buffer = buffer;
                 const reverbSelect = document.getElementById("reverbSelect");
                 updateUserSettings("irUrl", reverbSelect.selectedIndex, -1);
-                // console.log("Impulse response loaded:", irUrl);
+                console.log("Impulse response loaded:", irUrl);
             })
             .catch(error => console.error('Error loading impulse response:', error));
     }
