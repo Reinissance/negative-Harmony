@@ -660,7 +660,7 @@ function reloadWithUrl() {
             .then(response => response.arrayBuffer())
             .then(data => {
                 midiData = new Midi(data);
-                parseMidiFile();
+                parseMidiFile(midiData);
 
                 // paste the midi file url into the input field
                 document.getElementById("midiUrl").value = midiFileUrl;
