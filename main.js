@@ -21,6 +21,7 @@ let track_duration = 0;
 let normal = false; // for pitchbend to be possibly turned upside down if not in normal mode
 let sustain = {}; // notes that are sustained
 let sustainedNodes = {}; // nodes that are sustained
+let localFile = false; // Flag to check if the MIDI file is loaded from a local file
 let userSettings = { "channels": {} }; // Store user settings for or from shared via URL
 let fileSettings = {}; // Store the settings from the loaded MIDI file
 let audioContext = null; // Create an audio context
@@ -458,6 +459,7 @@ function checkForParamsInUrl() {
         fetch(midiFileUrl)
             .then(response => response.arrayBuffer())
             .then(data => {
+                localFile = false;
                 parseMidiFile(new Midi(data));
 
                 // paste the midi file url into the input field
@@ -660,6 +662,7 @@ function reloadWithUrl() {
             .then(response => response.arrayBuffer())
             .then(data => {
                 midiData = new Midi(data);
+                localFile = false;
                 parseMidiFile(midiData);
 
                 // paste the midi file url into the input field
@@ -719,6 +722,7 @@ function setupMidiPlayer() {
             const reader = new FileReader();
             reader.onload = function (e) {
                 userSettings = { "channels": {} }; // Reset user settings
+                localFile = true;
                 parseMidiFile(new Midi(e.target.result));
                 setPlayButtonAcive(true);
             };
@@ -1388,6 +1392,9 @@ window.share = function () {
 }
 
 function updateUserSettings(key, value, channel) {
+    if (localFile) {
+        return;
+    }
     if (channel === -1) {
         // for global settings
         userSettings[key] = value;
