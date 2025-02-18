@@ -17,6 +17,7 @@ let loadedChannelControlValues = {}; // on midiFile load, store the control valu
 let noMidi = true; // Flag to check if other MIDI devices are available
 let lastNotes = []; // Store the last notes played by the midi player to check the piece's key
 let midiFileRead; // bool if midi file is read
+let file = ""; // Store the uploaded MIDI file
 let track_duration = 0;
 let normal = false; // for pitchbend to be possibly turned upside down if not in normal mode
 let sustain = {}; // notes that are sustained
@@ -26,6 +27,7 @@ let userSettings = { "channels": {} }; // Store user settings for or from shared
 let fileSettings = {}; // Store the settings from the loaded MIDI file
 let audioContext = null; // Create an audio context
 let soloChannels = []; // Store the soloed channels
+let enableReversed = false; // Flag to check if the midi file should be playable in reverse
 let reversedPlayback = false; // Flag to check if the midi file should be played in reverse
 
 window.onload = function () {
@@ -395,6 +397,35 @@ function setPlayButtonAcive(active) {
     }
 }
 
+function enableReversedPlayback() {
+    if (Object.keys(userSettings.channels).length > 0) {
+        //reload the midi file with reversed playback enabled
+        reloadWithUserSettingsReverseable();
+    } else {
+        makeReverseable();
+        if (file != "") {
+            parseMidiFile(file);
+        }
+        else if (!localFile) {
+            const urlParams = new URLSearchParams(window.location.search);
+            const midiFileUrl = urlParams.get('midiFile');
+            if (midiFileUrl != undefined) {
+                reloadWithUserSettingsReverseable();
+            }
+        }
+        else console.log("No MIDI file loaded.");
+    }
+}
+
+function makeReverseable() {
+    var reverseCheckbox = document.getElementById("reverseMidi");
+    reverseCheckbox.checked = reversedPlayback;
+    reverseCheckbox.disabled = false;
+    reverseCheckbox.labels[0].textContent = "reverse";
+    document.getElementById("enableReversed").hidden = true;
+    enableReversed = true;
+}
+
 function checkForParamsInUrl() {
     // read and parse the url parameters
     const urlParams = new URLSearchParams(window.location.search);
@@ -403,8 +434,7 @@ function checkForParamsInUrl() {
     const reversed = urlParams.get('reversedPlayback');
     if (reversed) {
         reversedPlayback = (reversed === "true") ? true : false;
-        var reverseCheckbox = document.getElementById("reverseMidi");
-        reverseCheckbox.checked = reversedPlayback;
+        makeReverseable();
     }
     const modeParam = urlParams.get('mode');
     if (modeParam) {
@@ -650,35 +680,6 @@ function parseMidiFile(midiData) {
     // console.log("MIDI file parsed and scheduled, BPM:", bpm);
 }
 
-function reloadWithUrl() {
-    const midiFileUrl = document.getElementById("midiUrl").value;
-    preclean();
-    if (midiFileUrl) {
-        if (!midiFileUrl.endsWith(".mid")) {
-            alert("Please provide a valid MIDI file URL.");
-            return;
-        }
-        fetch(midiFileUrl)
-            .then(response => response.arrayBuffer())
-            .then(data => {
-                midiData = new Midi(data);
-                localFile = false;
-                parseMidiFile(midiData);
-
-                // paste the midi file url into the input field
-                document.getElementById("midiUrl").value = midiFileUrl;
-
-                // make share button visible
-                document.getElementById("hiddenShareButton").style.display = "block";
-            })
-            .catch(error => {
-                console.log(error);
-                alert('Error fetching MIDI file: ' + error);
-            });
-        }
-        setPlayButtonAcive(true);
-}
-
 function setupMidiPlayer() {
     // MIDI player code
 
@@ -717,16 +718,17 @@ function setupMidiPlayer() {
         preclean();
 
         // console.log("Loading MIDI file...");
-        const file = event.target.files[0];
-        if (file) {
+        load = event.target.files[0];
+        if (load) {
             const reader = new FileReader();
             reader.onload = function (e) {
                 userSettings = { "channels": {} }; // Reset user settings
                 localFile = true;
-                parseMidiFile(new Midi(e.target.result));
+                file = new Midi(e.target.result);
+                parseMidiFile(file);
                 setPlayButtonAcive(true);
             };
-            reader.readAsArrayBuffer(file);
+            reader.readAsArrayBuffer(load);
             // console.log("MIDI file loaded.");
         }
         else {
@@ -754,11 +756,13 @@ function setupMidiPlayer() {
                     bpm: tempo.bpm,
                     reversed: false
                 });
-                channelParts[0].add(track_duration - tempo.time, {
-                    type: 'tempo',
-                    bpm: tempo.bpm,
-                    reversed: true
-                });
+                if (enableReversed) {
+                    channelParts[0].add(track_duration - tempo.time, {
+                        type: 'tempo',
+                        bpm: tempo.bpm,
+                        reversed: true
+                    });
+                }
             });
         }
 
@@ -795,14 +799,16 @@ function setupMidiPlayer() {
                     channel: channel,
                     reversed: false
                 };
-                const reversedNoteEvent = {
-                    ...noteEvent,
-                    reversed: true
-                };
                 channelParts[channel].add(note.time, noteEvent);
-                const note_length = (note.duration <= Tone.Time("4n").toSeconds()) ? note.time : (note.time + ((channel != 9) ? note.duration : 0)); // drums duration ignored for reversed notes, else start notes at noteoff if greater than quarters.
-                const revTime = track_duration - note_length;
-                channelParts[channel].add(revTime, reversedNoteEvent);
+                if (enableReversed) {
+                    const reversedNoteEvent = {
+                        ...noteEvent,
+                        reversed: true
+                    };
+                    const note_length = (note.duration <= Tone.Time("4n").toSeconds()) ? note.time : (note.time + ((channel != 9) ? note.duration : 0)); // drums duration ignored for reversed notes, else start notes at noteoff if greater than quarters.
+                    const revTime = track_duration - note_length;
+                    channelParts[channel].add(revTime, reversedNoteEvent);
+                }
             });
 
             // Schedule control change events
@@ -823,13 +829,15 @@ function setupMidiPlayer() {
                         channel: channel,
                         reversed: false
                     });
-                    channelParts[channel].add(track_duration - nextCCtime, {
-                        type: 'controlChange',
-                        number: cc.number,
-                        value: cc.value,
-                        channel: channel,
-                        reversed: true
-                    });
+                    if (enableReversed) {
+                        channelParts[channel].add(track_duration - nextCCtime, {
+                            type: 'controlChange',
+                            number: cc.number,
+                            value: cc.value,
+                            channel: channel,
+                            reversed: true
+                        });
+                    }
                     nextCCtime = cc.time;
                 });
             });
@@ -849,12 +857,14 @@ function setupMidiPlayer() {
                     channel: channel,
                     reversed: false
                 });
-                channelParts[channel].add(track_duration - programChangeTime, {
-                    type: 'programChange',
-                    number: track.instrument.number,
-                    channel: channel,
-                    reversed: true
-                });
+                if (enableReversed) {
+                    channelParts[channel].add(track_duration - programChangeTime, {
+                        type: 'programChange',
+                        number: track.instrument.number,
+                        channel: channel,
+                        reversed: true
+                    });
+                }
                 if (channel === 9) {
                     track.notes.forEach(note => {
                         if (!availableDrumSoundsForNote[note.midi]) {
@@ -874,12 +884,14 @@ function setupMidiPlayer() {
                         channel: channel,
                         reversed: false
                     });
-                    channelParts[channel].add(track_duration - bend.time, {
-                        type: 'pitchBend',
-                        value: (bend.value + 1) * 8192, //pd bendin takes values from 0 to 16383
-                        channel: channel,
-                        reversed: true
-                    });
+                    if (enableReversed) {
+                        channelParts[channel].add(track_duration - bend.time, {
+                            type: 'pitchBend',
+                            value: (bend.value + 1) * 8192, //pd bendin takes values from 0 to 16383
+                            channel: channel,
+                            reversed: true
+                        });
+                    }
                     // console.log("Pitch bend:", bend, "on channel:", channel);
                 });
             }
@@ -1389,6 +1401,13 @@ window.share = function () {
     if (shares) {
         shares.style.display = "block";
     }
+}
+
+function reloadWithUserSettingsReverseable() {
+    const url = document.getElementById("midiUrl").value;
+    const baseUrl = window.location.href.split('?')[0] + "?midiFile=" + encodeURIComponent(url); // Base URL without query parameters
+    const shareUrl = generateShareUrl(baseUrl, userSettings);
+    window.location.href = shareUrl + "&reversedPlayback=false";
 }
 
 function updateUserSettings(key, value, channel) {

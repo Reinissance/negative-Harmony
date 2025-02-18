@@ -72,8 +72,9 @@
               <button class="btn btn-outline-warning" id="resetSpeed" style="margin-bottom: 10px; display: none;" onclick="setSpeed(1.0)">reset speed to file</button>
               <label for="speedControl">Playback Speed: </label>
               <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" class="form-range"/>
-              <input id="reverseMidi" class="btn-check" type="checkbox">
-                  <label class="btn btn-outline-light" for="reverseMidi">reverse</label><br>
+              <input id="reverseMidi" class="btn-check" type="checkbox" disabled="true">
+                  <label class="btn btn-outline-light" for="reverseMidi">reverse disabled</label><br>
+                <a id="enableReversed" href="javascript:void(0);" onclick="enableReversedPlayback();">enable</a>
             </div>
             <div>
               <div id="midiIn">
