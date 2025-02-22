@@ -6,15 +6,18 @@ const examples = JSON.parse(fs.readFileSync("examples.json", "utf-8"));
 // Log to debug the structure
 console.log("Parsed examples.json:", examples);
 
-// Create an array of artists with their songs
-const exampleEntries = Object.entries(examples).map(([artist, songs]) => {
-  // Get the song names and join them into a single string
-  const songList = Object.keys(songs).join(" ");
-  return {
-    name: `${artist} - ${songList}`,
-    url: Object.values(songs)[0] // Take the first song's URL (optional)
-  };
-});
+// Convert the object structure to a list of songs with artists
+const exampleSection = Object.entries(examples)
+  .map(([artist, songs]) => {
+    // Create a list of links for each song
+    const songLinks = Object.entries(songs)
+      .map(([song, url]) => `[${song}](${url})`)
+      .join(" ");
+
+    // Return the formatted string for the artist and their songs
+    return `- [${artist}](${url}) ${songLinks}`;
+  })
+  .join("\n");
 
 // Read README.md
 let readme = fs.readFileSync("README.md", "utf-8");
@@ -23,10 +26,7 @@ let readme = fs.readFileSync("README.md", "utf-8");
 const startMarker = "<!-- EXAMPLES_START -->";
 const endMarker = "<!-- EXAMPLES_END -->";
 
-const exampleSection = exampleEntries
-  .map((ex) => `- [${ex.name}](${ex.url})`)
-  .join("\n");
-
+// Replace the old section with the new one
 readme = readme.replace(
   new RegExp(`${startMarker}[\\s\\S]*?${endMarker}`, "g"),
   `${startMarker}\n${exampleSection}\n${endMarker}`
