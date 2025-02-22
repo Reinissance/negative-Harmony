@@ -15,7 +15,7 @@ const exampleSection = Object.entries(examples)
       .join(" ");
 
     // Return the formatted string for the artist and their songs
-    return `- [${artist}](${url}) ${songLinks}`;
+    return `- ${artist} ${songLinks}`;
   })
   .join("\n");
 
