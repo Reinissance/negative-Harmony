@@ -64,6 +64,11 @@
     float: right;
   }
 
+  ul {
+    list-style-type: none;
+    margin-left: 30px;
+  }
+
   a {
     color: #2ee400;
     text-shadow: 0 0 10px black;

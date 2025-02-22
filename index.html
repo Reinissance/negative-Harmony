@@ -22,6 +22,41 @@
       var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
         return new bootstrap.Tooltip(tooltipTriggerEl)
       })
+      fetch("examples.json")
+        .then(response => response.json())
+        .then(data => {
+          const container = document.getElementById("examples");
+          container.innerHTML = ""; // Clear previous content
+
+            const list = document.createElement("ul");
+
+            for (const artist in data) {
+            const artistItem = document.createElement("li");
+            const artistHeader = document.createElement("h4");
+            artistHeader.textContent = artist + ":";
+            artistItem.appendChild(artistHeader);
+
+            const songList = document.createElement("ul");
+
+            for (const song in data[artist]) {
+              const songItem = document.createElement("li");
+              const link = document.createElement("a");
+
+              link.href = data[artist][song];
+              link.textContent = song;
+              link.target = "_blank"; // Open in new tab
+
+              songItem.appendChild(link);
+              songList.appendChild(songItem);
+            }
+
+            artistItem.appendChild(songList);
+            list.appendChild(artistItem);
+            }
+
+            container.appendChild(list);
+        })
+        .catch(error => console.error("Error loading examples:", error));
     });
   </script>
   
@@ -185,7 +220,22 @@
         </div>
       </div>
     </div>
+    <div class="accordion-item boxed">
+      <h2 class="accordion-header" id="headingFive" style="position: sticky; top: 120px; z-index: 9999;">
+        <button style="position: sticky; top: 120px; z-index: 9999;" class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFive" aria-expanded="false" aria-controls="collapseFive">
+          EXAMPLES
+        </button>
+      </h2>
+      <div id="collapseFive" class="accordion-collapse collapse" aria-labelledby="headingFive" data-bs-parent="#accordionsContainer">
+        <div class="accordion-body">
+          <div>
+            <div id="examples" class="horizontal"><p>no Examples file loaded.</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
+</div>
   <div class="row">
     <span class="link"><em>powered by <a
           href="https://github.com/Wasted-Audio/hvcc" target="_blank"><strong>heavy,</strong></a> <a href="https://tonejs.github.io/" target="_blank"><strong>Tone.js</strong></a> and <a href="https://github.com/surikov/webaudiofont" target="_blank"><strong>WebAudioFont</strong></a></em></span>
