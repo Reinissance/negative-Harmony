@@ -31,27 +31,26 @@
             const list = document.createElement("ul");
 
             for (const artist in data) {
-            const artistItem = document.createElement("li");
-            const artistHeader = document.createElement("h4");
-            artistHeader.textContent = artist + ":";
-            artistItem.appendChild(artistHeader);
+              const artistItem = document.createElement("li");
+              const artistHeader = document.createElement("h4");
+              artistHeader.textContent = artist + ":";
+              artistItem.appendChild(artistHeader);
 
-            const songList = document.createElement("ul");
+              const songList = document.createElement("ol");
 
-            for (const song in data[artist]) {
-              const songItem = document.createElement("li");
-              const link = document.createElement("a");
+              for (const song in data[artist]) {
+                const songItem = document.createElement("li");
+                const link = document.createElement("a");
 
-              link.href = data[artist][song];
-              link.textContent = song;
-              link.target = "_blank"; // Open in new tab
+                link.href = data[artist][song];
+                link.textContent = song;
 
-              songItem.appendChild(link);
-              songList.appendChild(songItem);
-            }
+                songItem.appendChild(link);
+                songList.appendChild(songItem);
+              }
 
-            artistItem.appendChild(songList);
-            list.appendChild(artistItem);
+              artistItem.appendChild(songList);
+              list.appendChild(artistItem);
             }
 
             container.appendChild(list);
