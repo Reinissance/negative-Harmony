@@ -424,6 +424,7 @@ function makeReverseable() {
     reverseCheckbox.labels[0].textContent = "reverse";
     document.getElementById("enableReversed").hidden = true;
     enableReversed = true;
+    debouncedUpdateUserSettings("reversedPlayback", reversedPlayback, -1);
 }
 
 function checkForParamsInUrl() {
@@ -460,7 +461,7 @@ function checkForParamsInUrl() {
     const perOktaveParam = urlParams.get('perOktave');
     if (perOktaveParam) {
         updateSlider_perOktave(parseFloat(perOktaveParam));
-        updateUserSettings("perOktave", perOktaveParam, -1);
+        debouncedUpdateUserSettings("perOktave", perOktaveParam, -1);
         oktCheck = document.getElementById("parameter_perOktave");
         oktCheck.checked = (parseFloat(perOktaveParam) == 1.0) ? true : false;
     }
@@ -560,9 +561,8 @@ function checkForParamsInUrl() {
                             }
                             if (speedParam) {
                                 // speed needs to be set after the channel settings for some reason
-                                updateUserSettings("speed", speedParam, -1);
-                                speed = parseFloat(userSettings.speed);
-                                setSpeed(speed);
+                                debouncedUpdateUserSettings("speed", speedParam, -1);
+                                setSpeed(speedParam);
                             }
 
                             // GO!
@@ -600,18 +600,18 @@ function updateSlider_mode(value) {
     perOkt.hidden = (value == 0) ? true : false;
     normal = perOkt.hidden;
     sendEvent_allNotesOff();
-    updateUserSettings("mode", value, -1);
+    debouncedUpdateUserSettings("mode", value, -1);
 }
 
 function updateSlider_negRoot(value) {
-    console.log("Setting negRoot to:", value);
+    // console.log("Setting negRoot to:", value);
     if (loader.webAudioWorklet) {
         loader.sendFloatParameterToWorklet("negRoot", value);
     } else {
         loader.audiolib.setFloatParameter("negRoot", value);
     }
     sendEvent_allNotesOff();
-    updateUserSettings("negRoot", value, -1);
+    debouncedUpdateUserSettings("negRoot", value, -1);
 }
 
 function updateSlider_perOktave(value) {
@@ -621,12 +621,12 @@ function updateSlider_perOktave(value) {
         loader.audiolib.setFloatParameter("perOktave", value);
     }
     sendEvent_allNotesOff();
-    updateUserSettings("perOktave", value, -1);
+    debouncedUpdateUserSettings("perOktave", value, -1);
 }
 
 function setSpeed(value) {
     // bpm = bpm / speed;
-    speed = value;
+    speed = parseFloat(value);
     Tone.Transport.bpm.value = (bpm * speed).toFixed(2);
     const label = document.querySelector('label[for="speedControl"]');
     if (label) {
@@ -946,7 +946,7 @@ function setupMidiPlayer() {
         reversedPlayback = event.target.checked;
         const position = track_duration / speed - Tone.Transport.seconds;
         Tone.Transport.seconds = position;
-        updateUserSettings("reversedPlayback", reversedPlayback, -1);
+        debouncedUpdateUserSettings("reversedPlayback", reversedPlayback, -1);
         setTimeout(() => {
             sendEvent_allNotesOff();
         }, 300);
@@ -1068,7 +1068,7 @@ function setupMidiPlayer() {
     // Control playback speed with a range input
     document.getElementById('speedControl').addEventListener('input', function (event) {
         setSpeed(parseFloat(event.target.value));
-        updateUserSettings("speed", speed, -1);
+        debouncedUpdateUserSettings("speed", speed, -1);
     });
 
     document.getElementById("midiUrl").addEventListener('click', function (event) {
@@ -1337,15 +1337,15 @@ function setupGMPlayer() {
             .then(buffer => {
                 reverb.buffer = buffer;
                 const reverbSelect = document.getElementById("reverbSelect");
-                updateUserSettings("irUrl", reverbSelect.selectedIndex, -1);
-                console.log("Impulse response loaded:", irUrl);
+                debouncedUpdateUserSettings("irUrl", reverbSelect.selectedIndex, -1);
+                // console.log("Impulse response loaded:", irUrl);
             })
             .catch(error => console.error('Error loading impulse response:', error));
     }
 
     window.setReverbGain = function (value) {
         reverbGain.gain.value = value;
-        updateUserSettings("reverbGain", value, -1);
+        debouncedUpdateUserSettings("reverbGain", value, -1);
         // update the label
         var revLabel = document.querySelector('label[for="reverbVolume"]');
         revLabel.innerHTML = "Reverb Volume: " + parseFloat(value).toFixed(2);
@@ -1410,10 +1410,28 @@ function reloadWithUserSettingsReverseable() {
     window.location.href = shareUrl + "&reversedPlayback=false";
 }
 
+function debounce(func, wait) {
+    let timeout;
+    let argsQueue = [];
+    return function(...args) {
+        // console.log("Debouncing...", args);
+        argsQueue.push(args);
+        clearTimeout(timeout);
+        timeout = setTimeout(() => {
+            while (argsQueue.length) {
+                func.apply(this, argsQueue.shift());
+            }
+        }, wait);
+    };
+}
+
+const debouncedUpdateUserSettings = debounce(updateUserSettings, 300);
+
 function updateUserSettings(key, value, channel) {
     if (localFile) {
         return;
     }
+    // console.log("Updating user settings:", key, value, channel);
     if (channel === -1) {
         // for global settings
         userSettings[key] = value;
@@ -1518,6 +1536,48 @@ function cleanCashed () {
     }
 }
 
+function onchangeForChannel(event, channel) {
+    // console.log('Instrument changed:', event.target.selectedIndex, event.target.options[event.target.selectedIndex].text);
+    loadInstrumentsForProgramChange(channel, event.target.selectedIndex, 0, event.target.options[event.target.selectedIndex].text);
+    // update options for the soundfont select
+    let select = document.getElementById("sfIndex_" + channel);
+    select.innerHTML = "";
+    availableInstrumentsForProgramChange[event.target.selectedIndex].urls.forEach((name, i) => {
+        let option = document.createElement("option");
+        option.value = i;
+        option.text = name;
+        select.appendChild(option);
+    });
+    let preset = availableInstrumentsForProgramChange[event.target.selectedIndex]["urls"][0];
+    availableInstrumentsForProgramChange[event.target.selectedIndex].preset = "_tone_" + preset;
+    loadedChannelInstruments[channel].preset = "_tone_" + preset;
+    loadedChannelInstruments[channel].programNumber = event.target.selectedIndex;
+    if (!event.target.classList.contains("fromFile")) {
+        debouncedUpdateUserSettings(event.target.id, event.target.value, channel);
+    } else {
+        // remove "fromFile" class
+        event.target.classList.remove("fromFile");
+    }
+    // console.log('INSTRUMENT Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange[event.target.selectedIndex], "channelInsts:", loadedChannelInstruments[channel], channel);
+}
+
+function changeProgramForChannel(event, channel, programNumber) {
+    const select = event.target;
+    // availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
+    availableInstrumentsForProgramChange[programNumber].preset = "loading";
+    loadedChannelInstruments[channel].preset = "loading";
+    let instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
+    loadPreset("https://surikov.github.io/webaudiofontdata/sound/" + instrumentUrl + ".js")
+        .then((preset) => {
+            availableInstrumentsForProgramChange[programNumber].preset = preset;
+            loadedChannelInstruments[channel].preset = preset;
+            loadedChannelInstruments[channel].sfIndex = select.selectedIndex;
+            debouncedUpdateUserSettings(select.id, select.value, channel);
+            // console.log('POGRAM Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments, "Preset:", preset);
+        })
+        .catch((error) => console.error('Error loading preset:', error));
+}
+
 function createControlsForChannel(channel, programNumber, sfIndex, name) {
     let element = document.getElementById("channel_controls_" + channel);
     if (element) return;
@@ -1553,28 +1613,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
     instSelect.selectedIndex = programNumber;
     instSelect.classList.add("form-select");
     instSelect.onchange = function (event) {
-        // console.log('Instrument changed:', event.target.selectedIndex, event.target.options[event.target.selectedIndex].text);
-        loadInstrumentsForProgramChange(channel, event.target.selectedIndex, 0, event.target.options[event.target.selectedIndex].text);
-        // update options for the soundfont select
-        let select = document.getElementById("sfIndex_" + channel);
-        select.innerHTML = "";
-        availableInstrumentsForProgramChange[event.target.selectedIndex].urls.forEach((name, i) => {
-            let option = document.createElement("option");
-            option.value = i;
-            option.text = name;
-            select.appendChild(option);
-        });
-        preset = availableInstrumentsForProgramChange[event.target.selectedIndex]["urls"][0];
-        availableInstrumentsForProgramChange[event.target.selectedIndex].preset = "_tone_" + preset;
-        loadedChannelInstruments[channel].preset = "_tone_" + preset;
-        loadedChannelInstruments[channel].programNumber = event.target.selectedIndex;
-        if (!event.target.classList.contains("fromFile")) {
-            updateUserSettings(event.target.id, event.target.value, channel);
-        } else {
-            // remove "fromFile" class
-            event.target.classList.remove("fromFile");
-        }
-        // console.log('INSTRUMENT Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange[event.target.selectedIndex], "channelInsts:", loadedChannelInstruments[channel], channel);
+        onchangeForChannel(event, channel);
     };
     controlDiv.appendChild(instSelect);
 
@@ -1596,21 +1635,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
         console.warn("Soundfont index mismatch for channel:", channel, "selected:", select.selectedIndex, "sfIndex:", sfIndex);
     }
     select.onchange = function (event) {
-        const select = event.target;
-        programNumber = loadedChannelInstruments[channel].programNumber;
-        // availableInstrumentsForProgramChange[programNumber].usingChannels.pop(channel);
-        availableInstrumentsForProgramChange[programNumber].preset = "loading";
-        loadedChannelInstruments[channel].preset = "loading";
-        let instrumentUrl = availableInstrumentsForProgramChange[programNumber].urls[select.selectedIndex];
-        loadPreset("https://surikov.github.io/webaudiofontdata/sound/" + instrumentUrl + ".js")
-            .then((preset) => {
-                availableInstrumentsForProgramChange[programNumber].preset = preset;
-                loadedChannelInstruments[channel].preset = preset;
-                loadedChannelInstruments[channel].sfIndex = select.selectedIndex;
-                updateUserSettings(select.id, select.value, channel);
-                // console.log('POGRAM Preset loaded and decoded. AVAILABLE:', availableInstrumentsForProgramChange, "channelInsts:", loadedChannelInstruments, "Preset:", preset);
-            })
-            .catch((error) => console.error('Error loading preset:', error));
+        changeProgramForChannel(event, channel, loadedChannelInstruments[channel].programNumber);
     };
     select.classList.add("form-select");
     controlDiv.appendChild(select);
@@ -1665,7 +1690,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
             let channel = slider.getAttribute('data-channel');
             loadedChannelInstruments[channel].gainNode.gain.value = slider.value / 127;
             document.getElementById("volume_label_" + channel).innerHTML = `Volume: ${(slider.value / 127).toFixed(2)}`;
-            updateUserSettings(slider.id, slider.value, channel);
+            debouncedUpdateUserSettings(slider.id, slider.value, channel);
         }
     );
     controlDiv.appendChild(volumeControl.controlLabel);
@@ -1680,7 +1705,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
             let channel = slider.getAttribute('data-channel');
             loadedChannelInstruments[channel].panNode.pan.value = slider.value;
             document.getElementById("pan_label_" + channel).innerHTML = `Panning: ${parseFloat(slider.value).toFixed(2)}`;
-            updateUserSettings(slider.id, slider.value, channel);
+            debouncedUpdateUserSettings(slider.id, slider.value, channel);
         }
     );
     controlDiv.appendChild(panControl.controlLabel);
@@ -1693,7 +1718,7 @@ function createControlsForChannel(channel, programNumber, sfIndex, name) {
             let channel = slider.getAttribute('data-channel');
             loadedChannelInstruments[channel].reverbSendGainNode.gain.value = slider.value;
             document.getElementById("reverb_label_" + channel).innerHTML = `Reverb Send: ${parseFloat(slider.value).toFixed(2)}`;
-            updateUserSettings(slider.id, slider.value, channel);
+            debouncedUpdateUserSettings(slider.id, slider.value, channel);
         }
     );
     controlDiv.appendChild(reverbControl.controlLabel);
@@ -1752,7 +1777,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
         volumeSlider.oninput = function (event) {
             drumInstrument.gainNode.gain.value = event.target.value / 127;
             document.getElementById("vol_label_drum").innerHTML = `Volume: ${(event.target.value / 127).toFixed(2)}`;
-            updateUserSettings(event.target.id, event.target.value, 9);
+            debouncedUpdateUserSettings(event.target.id, event.target.value, 9);
         };
         volumeSlider.classList.add("form-range");
         controlDiv.appendChild(vol_label);
@@ -1773,7 +1798,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
         panSlider.oninput = function (event) {
             drumInstrument.panNode.pan.value = event.target.value;
             document.getElementById("pan_label_drum").innerHTML = `Panning: ${parseFloat(event.target.value).toFixed(2)}`;
-            updateUserSettings(event.target.id, event.target.value, 9);
+            debouncedUpdateUserSettings(event.target.id, event.target.value, 9);
         };
         panSlider.classList.add("form-range");
         controlDiv.appendChild(pan_label);
@@ -1854,7 +1879,7 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
             addNoteToDrumInstrument(note, availableDrumSoundsForNote[event.target.selectedIndex + 35].preset);
         }
         drumInstrument.overriddenNotes[note] = event.target.selectedIndex + 35;
-        updateUserSettings(event.target.id, event.target.value, 9);
+        debouncedUpdateUserSettings(event.target.id, event.target.value, 9);
     }
     noteSelect.classList.add("form-select");
     selectDiv.appendChild(noteSelect);
@@ -1883,10 +1908,10 @@ function createDrumInstrumentControl(note, sf2Index, callerId) {
                 drumInstrument.notes[note] = preset;
                 createDrumInstrumentControl(note, index, event.target.id);
                 event.target.selectedIndex = index;
-                updateUserSettings(event.target.id, index, 9);
+                debouncedUpdateUserSettings(event.target.id, index, 9);
             })
             .catch((error) => console.error('Error loading drum sound:', error));
-        // updateUserSettings(event.target.id, event.target.value, 9);
+        // debouncedUpdateUserSettings(event.target.id, event.target.value, 9);
     };
     noteSfSelect.classList.add("form-select");
     selectDiv.appendChild(noteSfSelect);
