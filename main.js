@@ -689,12 +689,15 @@ function setupMidiPlayer() {
         if (playing) {
             // console.log("Stopping playback...");
             Tone.Transport.stop();
-            Tone.Transport.position = 0;
             playing = false;
+            reversedPlayback = false;
+            document.getElementById("reverseMidi").checked = reversedPlayback;
             document.getElementById('playMidi').innerText = "Play MIDI";
             progressSlider.value = 0;
             progressSlider.style.display = "none";
             sendEvent_allNotesOff();
+            Tone.Transport.position = 0;
+            Tone.Transport.seconds = 0;
         }
         // make playbutton unrespondable
         setPlayButtonAcive(false);
