@@ -42,7 +42,11 @@
                 const songItem = document.createElement("li");
                 const link = document.createElement("a");
 
-                link.href = data[artist][song];
+                link.href = "javascript:void(0);";
+                link.onclick = function() {
+                  preclean();
+                  checkForParamsInUrl(new URL(data[artist][song]).searchParams);
+                };
                 link.textContent = song;
 
                 songItem.appendChild(link);

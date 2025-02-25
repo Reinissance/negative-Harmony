@@ -7,6 +7,7 @@ let midiInputs = [];
 let bpm = 120;
 let speed = 1.0;
 let player = null;
+let loadTime = 0;
 
 let loadedChannelInstruments = new Map(); // Store necessary instruments for midi file playback
 let availableInstrumentsForProgramChange = new Map(); // Store available instrument soundfonts provided by webaudiofont per program change number
@@ -71,7 +72,7 @@ function start() {
             document.getElementById("col_transport").style = "";
             updateSlider_perOktave(1);
             updateSlider_mode(2);
-            checkForParamsInUrl();
+            checkForParamsInUrl(new URLSearchParams(window.location.search));
         });
     }
     loader.start();
@@ -427,9 +428,7 @@ function makeReverseable() {
     debouncedUpdateUserSettings("reversedPlayback", reversedPlayback, -1);
 }
 
-function checkForParamsInUrl() {
-    // read and parse the url parameters
-    const urlParams = new URLSearchParams(window.location.search);
+function checkForParamsInUrl(urlParams) {
     // console.log("URL params:", urlParams);
     // first the global settings
     const reversed = urlParams.get('reversedPlayback');
@@ -649,7 +648,7 @@ function setSpeed(value) {
 
 function parseMidiFile(midiData) {
     document.getElementById("file_controls").innerHTML = "";
-    console.log(midiData);
+    // console.log(midiData);
     midiFileRead = true;
     track_duration = midiData.duration;
 
@@ -739,6 +738,7 @@ function setupMidiPlayer() {
         // Clear any previous scheduled parts
         parts.forEach(part => part.dispose());
         parts = [];
+        loadTime = Tone.now();
 
         // Create a part for each channel
         const channelParts = {};
@@ -932,7 +932,7 @@ function setupMidiPlayer() {
             part.callback = (time, event) => {
                 fireMidiEvent(event, time);
             };
-            part.start(Tone.now());
+            part.start(Tone.now() - loadTime);
             parts.push(part);
         });
     }
@@ -1003,7 +1003,6 @@ function setupMidiPlayer() {
                 playBtn.innerText = "Stop Playback";
                 playing = true;
                 Tone.Transport.position = 0;
-                startTime = Tone.now();
                 Tone.Transport.start();
                 progressSlider.style.display = "block";
 
@@ -1038,7 +1037,7 @@ function setupMidiPlayer() {
                     }
                 }, "4n");
             } else {
-                alert("Please upload a MIDI file or paste a url to a file first.");
+                alert("Please upload a MIDI file or paste a url to a file first, or select one of the examples below.");
                 console.error("No MIDI file loaded or parsed.");
             }
         } else {
@@ -1133,6 +1132,9 @@ function setupGMPlayer() {
         }
         else {
             var instrument = loadedChannelInstruments.get(channel);
+            if (instrument === undefined) {
+                return;
+            }
             if (instrument.preset === "loading" || instrument.preset === undefined) {
                 // console.log('Instrument is still loading:', channel, instrument);
                 return;
@@ -1505,6 +1507,7 @@ function cleanup() {
         // console.log("Releasing cached instrument:", cachedInstr);
         player.loader.cached.splice(i, 1);
     }
+    // console.log("Cleanup done.");
 }
 
 function cleanCashed () {
