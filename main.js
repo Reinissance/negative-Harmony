@@ -428,6 +428,34 @@ function makeReverseable() {
     debouncedUpdateUserSettings("reversedPlayback", reversedPlayback, -1);
 }
 
+function reloadWithUrl() {
+    const midiFileUrl = document.getElementById("midiUrl").value;
+    if (midiFileUrl) {
+        if (!midiFileUrl.endsWith(".mid")) {
+            alert("Please provide a valid MIDI file URL.");
+            return;
+        }
+        fetch(midiFileUrl)
+            .then(response => response.arrayBuffer())
+            .then(data => {
+                midiData = new Midi(data);
+                cleanup();
+                parseMidiFile(midiData);
+
+                // paste the midi file url into the input field
+                document.getElementById("midiUrl").value = midiFileUrl;
+
+                // make share button visible
+                document.getElementById("hiddenShareButton").style.display = "block";
+            })
+            .catch(error => {
+                console.log(error);
+                alert('Error fetching MIDI file: ' + error);
+            });
+        }
+        setPlayButtonAcive(true);
+}
+
 function checkForParamsInUrl(urlParams) {
     // console.log("URL params:", urlParams);
     // first the global settings
