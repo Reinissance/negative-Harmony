@@ -439,7 +439,7 @@ function reloadWithUrl() {
             .then(response => response.arrayBuffer())
             .then(data => {
                 midiData = new Midi(data);
-                cleanup();
+                preclean();
                 parseMidiFile(midiData);
 
                 // paste the midi file url into the input field
@@ -1505,6 +1505,9 @@ function cleanup() {
     userSettings = { "channels": {} };
     fileSettings = {};
     lastNotes = [];
+    reversedPlayback = false;
+    const reverseCheckbox = document.getElementById('reverseMidi');
+    reverseCheckbox.checked = false;
     loadedChannelInstruments = new Map();
     if (drumInstrument) {
         drumInstrument.notes = new Map();
