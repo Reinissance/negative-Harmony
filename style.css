@@ -1,4 +1,20 @@
 
+.st-btn, .st-btn-compact, .st-share-button {
+    transition: none !important;
+    animation: none !important;
+}
+
+.st-popup, .st-sticky-share-buttons {
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Disable all ShareThis animations */
+[class*="st-"] {
+    transition: none !important;
+    animation: none !important;
+}
+
 .remain {
   position: sticky;
   top: 0px;

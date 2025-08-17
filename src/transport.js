@@ -1,0 +1,620 @@
+/**
+ * Transport Module
+ * Handles play/pause/stop functionality, progress tracking, and speed control
+ */
+
+class Transport {
+    constructor(app) {
+        this.app = app;
+        this.playing = false;
+        this.parts = [];
+        this.progressSlider = null;
+    }
+
+    async init() {
+        this.progressSlider = document.getElementById('progress-input');
+        this.setupEventListeners();
+    }
+
+    setupEventListeners() {
+        // Play/Stop button
+        const playButton = document.getElementById('playMidi');
+        if (playButton) {
+            playButton.addEventListener('click', () => this.togglePlayback());
+        }
+
+        // Speed control
+        const speedControl = document.getElementById('speedControl');
+        if (speedControl) {
+            speedControl.addEventListener('input', (event) => this.handleSpeedChange(event));
+        }
+
+        this.setupTransportControls();
+    }
+
+    setupTransportControls() {
+    // Reverse MIDI checkbox
+        document.getElementById('reverseMidi').addEventListener('click', (event) => {
+            const state = this.app.state;
+            if (state.reversedPlayback === event.target.checked) {
+                return;
+            }
+            state.reversedPlayback = event.target.checked;
+            const position = this.app.track_duration / state.speed - Tone.Transport.seconds;
+            Tone.Transport.seconds = position;
+            
+            const settingsManager = this.app.modules.settingsManager;
+            if (settingsManager) {
+                settingsManager.updateUserSettings("reversedPlayback", state.reversedPlayback, -1);
+            }
+            
+            setTimeout(() => {
+                const midiManager = this.app.modules.midiManager;
+                if (midiManager) {
+                    midiManager.sendEvent_allNotesOff();
+                }
+            }, 300);
+        });
+
+        // Progress slider
+        this.setupProgressSlider();
+        
+    }
+
+    setupProgressSlider() {
+        const progressSlider = document.getElementById('progress-input');
+        if (!progressSlider) return;
+        const state = this.app.state;
+
+        progressSlider.oninput = (event) => {
+            const state = this.app.state;
+            const position = (event.target.value / 100) * (this.app.track_duration / state.speed);
+            Tone.Transport.seconds = state.reversedPlayback ? 
+                (this.app.track_duration / state.speed) - position : position;
+
+            setTimeout(() => {
+                const midiManager = this.app.modules.midiManager;
+                if (midiManager) {
+                    midiManager.sendEvent_allNotesOff();
+                }
+            }, 300);
+        };
+    }
+
+    togglePlayback() {
+        const state = this.app.state;
+        const playBtn = document.getElementById('playMidi');
+
+        if (!this.playing) {
+            if (this.app.midiFileRead) {
+                this.startPlayback(playBtn);
+            } else {
+                Utils.showError("Please upload a MIDI file or paste a URL first");
+            }
+        } else {
+            this.stopPlayback(playBtn);
+        }
+    }
+
+    startPlayback(playBtn) {
+        playBtn.innerText = "Stop Playback";
+        this.playing = true;
+        Tone.Transport.position = 0;
+        Tone.Transport.start();
+        
+        if (this.progressSlider) {
+            this.progressSlider.style.display = "block";
+            const state = this.app.state;
+            // Update the progress slider during playback
+            Tone.Transport._scheduledRepeatId = Tone.Transport.scheduleRepeat((time) => {
+                const position = Tone.Transport.seconds;
+                const progress = ((state.reversedPlayback ? (this.app.track_duration / state.speed) - position : position) / (this.app.track_duration / state.speed)) * 100;
+                this.progressSlider.value = progress;
+                // console.log("POSITION (seconds):", Tone.Transport.seconds, " / ", track_duration / speed, Tone.Transport.position, "PROGRESS:", progress);
+
+                if ((!state.reversedPlayback && progress >= 100) || (state.reversedPlayback && progress <= 0)) {
+                    // console.log("Stopping playback...");
+                    playBtn.innerText = "Play MIDI";
+                    setTimeout(() => {
+                        this.playing = false;
+                        Tone.Transport.stop(time);
+                        Tone.Transport.position = 0;
+                        this.progressSlider.value = 0;
+                    }, 200);
+                    this.progressSlider.style.display = "none";
+                    this.app.modules.midiManager.sendEvent_allNotesOff();
+                }
+            }, "4n");
+        }
+    }
+
+    stopPlayback(playBtn) {
+        Tone.Transport.stop();
+        Tone.Transport.position = 0;
+        playBtn.innerText = "Play MIDI";
+        
+        if (this.progressSlider) {
+            this.progressSlider.value = 0;
+            this.progressSlider.style.display = "none";
+        }
+
+        // Clear any existing scheduled repeat events
+        if (Tone.Transport._scheduledRepeatId) {
+            Tone.Transport.clear(Tone.Transport._scheduledRepeatId);
+        }
+
+        //send all notes off after 0.5 seconds to ensure all notes are released
+        setTimeout(() => {
+            this.app.modules.midiManager.sendEvent_allNotesOff();
+            // send sustain pedal off
+            this.app.modules.midiManager.sendEvent_sustainPedalOff();
+        }, 500);
+        
+        this.playing = false;
+    }
+
+    setSpeed(value) {
+        const state = this.app.state;
+        const wasPlaying = this.playing;
+        const currentPosition = Tone.Transport.seconds;
+        
+        // Stop transport and clear all scheduled events if playing
+        if (wasPlaying) {
+            Tone.Transport.stop();
+            Tone.Transport.cancel(); // Clear ALL scheduled events
+            
+            // Send immediate all notes off
+            const midiManager = this.app.modules.midiManager;
+            midiManager.sendEvent_allNotesOff();
+            midiManager.sendEvent_sustainPedalOff();
+        }
+        
+        state.speed = parseFloat(value);
+        Tone.Transport.bpm.value = (this.app.bpm * state.speed).toFixed(2);
+
+        // Update UI
+        const label = document.querySelector('label[for="speedControl"]');
+        if (label) {
+            label.textContent = "Playback Speed: " + (this.app.bpm * state.speed).toFixed(2) + " BPM";
+        }
+
+        const speedSlider = document.getElementById("speedControl");
+        if (speedSlider) {
+            speedSlider.value = state.speed;
+        }
+        
+        const resetBtn = document.getElementById("resetSpeed");
+        if (resetBtn) {
+            resetBtn.style.display = (state.speed === 1.0) ? "none" : "block";
+        }
+
+        // If was playing, restart from adjusted position
+        if (wasPlaying) {
+            // Restart parts with new timing
+            this.parts.forEach(part => {
+                part.stop();
+                part.start(0.1);
+            });
+            
+            // Set position and restart transport
+            setTimeout(() => {
+                // Adjust position for new speed
+                const adjustedPosition = currentPosition;
+                Tone.Transport.seconds = adjustedPosition;
+                Tone.Transport.start();
+            }, 100);
+        } else {
+            // Just send notes off if not playing
+            setTimeout(() => {
+                const midiManager = this.app.modules.midiManager;
+                midiManager.sendEvent_allNotesOff();
+                midiManager.sendEvent_sustainPedalOff();
+            }, 100);
+        }
+
+        this.app.modules.settingsManager.updateUserSettings("speed", state.speed, -1);
+    }
+
+    handleSpeedChange(event) {
+        this.setSpeed(parseFloat(event.target.value));
+    }
+
+    preclean() {
+        const state = this.app.state;
+        
+        if (this.playing) {
+            Tone.Transport.stop();
+            this.playing = false;
+            state.reversedPlayback = false;
+            
+            // Update UI elements
+            const reverseMidiCheckbox = document.getElementById("reverseMidi");
+            if (reverseMidiCheckbox) {
+                reverseMidiCheckbox.checked = false;
+            }
+            
+            const playButton = document.getElementById('playMidi');
+            if (playButton) {
+                playButton.innerText = "Play MIDI";
+            }
+            
+            if (this.progressSlider) {
+                this.progressSlider.value = 0;
+                this.progressSlider.style.display = "none";
+            }
+            
+            // Clear transport state
+            Tone.Transport.cancel();
+            Tone.Transport.position = 0;
+            Tone.Transport.seconds = 0;
+            
+            // Send all notes off
+            const midiManager = this.app.modules.midiManager;
+            if (midiManager) {
+                midiManager.sendEvent_allNotesOff();
+            } else {
+                console.warn('No MIDI manager available to send all notes off');
+            }
+            document.getElementById("hiddenShareButton").style.display = "none";
+            const shares = document.getElementById("st-1")
+            if (shares) {
+                shares.style.display = "none";
+            }
+        }
+        
+        // Make play button unresponsive
+        Utils.setPlayButtonActive(false);
+        
+        // Clean up if MIDI file was read
+        if (this.app.midiFileRead) {
+            // Use audio engine cleanup if available
+            this.app.modules.audioEngine.cleanup();
+        }
+    }
+
+    fireMidiEvent(event, time) {
+        const state = this.app.state;
+        
+        if (event.reversed !== state.reversedPlayback) {
+            return;
+        }
+        
+        switch (event.type) {
+            case 'note':
+                this.handleMidiMessage({
+                    data: [0x90 + event.channel, event.midi, event.velocity]
+                });
+                
+                const noteOffTime = Tone.Transport.seconds + event.duration / state.speed;
+                Tone.Transport.schedule((releaseTime) => {
+                    this.handleMidiMessage({
+                        data: [0x80 + event.channel, event.midi, 0]
+                    });
+                }, noteOffTime);
+                break;
+                
+            case 'controlChange':
+                this.handleMidiMessage({
+                    data: [0xB0 + event.channel, event.number, Math.floor(event.value * 127)]
+                });
+                break;
+                
+            case 'programChange':
+                this.handleMidiMessage({
+                    data: [0xC0 + event.channel, event.number]
+                });
+                break;
+                
+            case 'pitchBend':
+                this.handleMidiMessage({
+                    data: [0xE0 + event.channel, event.value & 0x7F, event.value >> 7]
+                });
+                break;
+                
+            case 'tempo':
+                Tone.Draw.schedule((time) => {
+                    const label = document.querySelector('label[for="speedControl"]');
+                    if (label) {
+                        label.textContent = "Playback Speed: " + (this.app.bpm * state.speed).toFixed(2) + " BPM";
+                    }
+                }, Tone.now());
+                break;
+        }
+    }
+
+    handleMidiMessage(message) {
+        // Delegate to MIDI manager if available
+        const midiManager = this.app.modules.midiManager;
+        if (midiManager) {
+            midiManager.handleMIDIMessage(message);
+        } else {
+            console.warn('No MIDI message handler available');
+        }
+    }
+
+    scheduleMIDIEvents(midi) {
+        // Clear any previous scheduled parts
+        this.parts.forEach(part => part.dispose());
+        this.parts = [];
+
+        // RESET Transport completely
+        Tone.Transport.stop();
+        Tone.Transport.cancel(); // Cancel all scheduled events
+        Tone.Transport.position = 0;
+        Tone.Transport.seconds = 0;
+        
+        const state = this.app.state;
+        const loadTime = Tone.now() + 0.1;
+
+        // Get player from audio engine instead of global
+        const audioEngine = this.app.modules.audioEngine;
+        const player = audioEngine?.getPlayer();
+        
+        if (!player) {
+            console.error('scheduleMIDIEvents: No player available from audio engine');
+            return;
+        }
+
+        // Create a part for each channel
+        const channelParts = {};
+
+        // Schedule tempos from header
+        if (Array.isArray(midi.header.tempos)) {
+            midi.header.tempos.forEach(tempo => {
+                if (!channelParts[0]) {
+                    channelParts[0] = new Tone.Part();
+                }
+                channelParts[0].add(tempo.time, {
+                    type: 'tempo',
+                    bpm: tempo.bpm,
+                    reversed: false
+                });
+                channelParts[0].add(this.app.track_duration - tempo.time, {
+                    type: 'tempo',
+                    bpm: tempo.bpm,
+                    reversed: true
+                });
+            });
+        }
+
+        // Set timeSignature
+        if (midi.header.timeSignatures.length > 0) {
+            const timeSignature = midi.header.timeSignatures[0];
+            Tone.Transport.timeSignature = timeSignature.timeSignature;
+        }
+
+        let lastPC = 0;
+        
+        // Get the loadedChannelControlValues from audio engine
+        const loadedChannelControlValues = audioEngine?.getLoadedChannelControlValues() || new Map();
+
+        let lastNotes = [];
+        // Loop through each track in the MIDI file
+        midi.tracks.forEach((track, trackIndex) => {
+            // exclude empty tracks
+            if (track.notes.length === 0 && Object.keys(track.controlChanges).length === 0 && track.pitchBends.length === 0) {
+                return;
+            }
+
+            const channel = track.channel;
+            if (!channelParts[channel]) {
+                channelParts[channel] = new Tone.Part();
+            }
+
+            // Schedule note events
+            track.notes.forEach(note => {
+                const velocity = (channel === 9) ? Math.floor(note.velocity * 127) : Math.floor(Math.pow(note.velocity, 2) * 127);
+                const transformedMidi = (channel === 9) ? note.midi : this.app.transformNote(note.midi);
+                const noteEvent = {
+                    type: 'note',
+                    midi: transformedMidi,
+                    originalMidi: note.midi,
+                    duration: note.duration,
+                    velocity: velocity,
+                    channel: channel,
+                    reversed: false
+                };
+                channelParts[channel].add(note.time, noteEvent);
+                const reversedNoteEvent = {
+                    ...noteEvent,
+                    reversed: true
+                };
+                const note_length = (note.duration <= Tone.Time("4n").toSeconds()) ? note.time : (note.time + ((channel != 9) ? note.duration : 0));
+                const revTime = this.app.track_duration - note_length;
+                channelParts[channel].add(revTime, reversedNoteEvent);
+            });
+
+            // Schedule control change events
+            Object.values(track.controlChanges).forEach(controlChange => {
+                let nextCCtime = 0;
+                controlChange.forEach(cc => {
+                    // add the first to loadedChannelControlValues
+                    if (!loadedChannelControlValues.has(channel)) {
+                        loadedChannelControlValues.set(channel, new Map());
+                    }
+                    if (!loadedChannelControlValues.get(channel).has(cc.number)) {
+                        loadedChannelControlValues.get(channel).set(cc.number, cc.value);
+                    }
+                    channelParts[channel].add(cc.time, {
+                        type: 'controlChange',
+                        number: cc.number,
+                        value: cc.value,
+                        channel: channel,
+                        reversed: false
+                    });
+                    channelParts[channel].add(this.app.track_duration - nextCCtime, {
+                        type: 'controlChange',
+                        number: cc.number,
+                        value: cc.value,
+                        channel: channel,
+                        reversed: true
+                    });
+                    nextCCtime = cc.time;
+                });
+            });
+
+            // Schedule program change events
+            if (track.instrument !== undefined) {
+                const programChange = track.instrument["number"] || lastPC;
+                lastPC = programChange;
+                if (channel != 9 && channel >= 0) {
+                    // preload the instruments for the program change and setup mixer channels
+                    const audioEngine = app?.modules.audioEngine;
+                    audioEngine?.loadInstrumentsForProgramChange(channel, programChange, 0, track.name);
+                }
+                const programChangeTime = track.notes.length > 0 ? track.notes[0].time : 0;
+                channelParts[channel].add(programChangeTime, {
+                    type: 'programChange',
+                    number: track.instrument.number,
+                    channel: channel,
+                    reversed: false
+                });
+                channelParts[channel].add(this.app.track_duration - programChangeTime, {
+                    type: 'programChange',
+                    number: track.instrument.number,
+                    channel: channel,
+                    reversed: true
+                });
+                if (channel === 9) {
+                    track.notes.forEach(note => {
+                        const audioEngine = this.app.modules.audioEngine;
+                        const drumSoundsMap = audioEngine?.getAvailableDrumSounds() || new Map();
+                        
+                        if (!drumSoundsMap.has(note.midi)) {
+                            // preload the drum sounds for each used note
+                            if (audioEngine) {
+                                audioEngine.loadDrumSoundForNote(note.midi, 0);
+                            } else {
+                                console.warn(`No audio engine available to preload drum sound for note ${note.midi}`);
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Schedule pitch bend events
+            if (track.pitchBends.length > 0) {
+                track.pitchBends.forEach(bend => {
+                    const originalValue = bend.value;
+                    let transformedValue = originalValue;
+                    
+                    // Apply pitch bend transformation based on mode
+                    const state = this.app.state;
+                    if (state.mode !== 0) { // If not in normal mode (negative harmony or left hand piano)
+                        const normal = this.app.normal;
+                        const factor = (!normal) ? -1 : 1;
+                        transformedValue = originalValue * factor;
+                    }
+                    
+                    channelParts[channel].add(bend.time, {
+                        type: 'pitchBend',
+                        value: (transformedValue + 1) * 8192,
+                        originalValue: originalValue, // Store original for re-transformation
+                        channel: channel,
+                        reversed: false
+                    });
+                    channelParts[channel].add(this.app.track_duration - bend.time, {
+                        type: 'pitchBend',
+                        value: (transformedValue + 1) * 8192,
+                        originalValue: originalValue,
+                        channel: channel,
+                        reversed: true
+                    });
+                });
+            }
+
+            // key detection logic
+            if (state.negRoot === null) {
+                // Store the last notes played by the midi player to check the piece's key
+                if (track.notes.length > 0 && channel != 9) {
+                    const lastNote = track.notes[track.notes.length - 1].midi;
+                    if (lastNotes.length && lastNote.time > lastNotes[(lastNotes.length - 1)].time) {
+                        // clear the array if the last note is played later than the last note in the array
+                        lastNotes = [];
+                    }
+                    if (!lastNotes.includes(lastNote)) {
+                        lastNotes.push(lastNote);
+                    }
+                }
+            }
+            //end of looping trackchannels
+        });
+
+        // console.log ("LAST NOTES:", this.app.lastNotes, "negRoot:", state.negRoot);
+
+        // Check the piece's key
+        if (lastNotes.length > 0) {
+            // get the lowest note
+            const lowestNote = Math.min(...lastNotes);
+            // set root input to the lowest note
+            const negRootSelect = document.getElementById("parameter_negRoot");
+            // find the options value that matches the lowest note
+            for (const option of negRootSelect.options) {
+                if (parseInt(option.value - 3) % 12 === lowestNote % 12) {
+                    state.negRoot = parseInt(option.value + 3); //backwards compatibility: this is haunting you...
+                    negRootSelect.selectedIndex = option.index;
+                    negRootSelect.dispatchEvent(new Event('change'));
+                    break;
+                }
+            }            
+        }
+
+        // Start all parts
+        Object.values(channelParts).forEach(part => {
+            part.callback = (time, event) => {
+                this.fireMidiEvent(event, time);
+            };
+            part.start(0.1);
+            this.parts.push(part);
+        });
+    }
+
+    updateChannels() {
+        this.parts.forEach(part => {
+            if (part._events) {
+                part._events.forEach(event => {
+                    // Update notes
+                    // Check if this is a note event and not channel 9 (drums)
+                    if (event.value && event.value.type === 'note' && event.value.channel !== 9) {
+                        // console.log("Updating channel:", event.value.channel, "original note:", event.value.midi);
+                        // Transform the note using the current app settings
+                        const transformedNote = this.app.transformNote(event.value.originalMidi);
+                        event.value.midi = transformedNote;
+                        // console.log("Transformed to:", event.value.midi);
+                    }
+                    
+                    // Update pitch bend events
+                    if (event.value && event.value.type === 'pitchBend') {
+                        const state = this.app.state;
+                        let transformedValue = event.value.originalValue;
+                        
+                        if (state.mode !== 0) { // If not in normal mode
+                            const normal = this.app.normal;
+                            const factor = (!normal) ? -1 : 1;
+                            transformedValue = event.value.originalValue * factor;
+                        }
+                        else {
+                            transformedValue = event.value.originalValue;
+                        }
+
+                        event.value.value = (transformedValue + 1) * 8192;
+                    }
+                });
+            }
+        });
+    }
+
+    cleanup() {
+        if (this.playing) {
+            this.stopPlayback(document.getElementById('playMidi'));
+        }
+        
+        this.parts.forEach(part => part.dispose());
+        this.parts = [];
+    }
+}
+
+// Export for module usage
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = Transport;
+}

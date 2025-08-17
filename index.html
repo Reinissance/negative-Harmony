@@ -7,13 +7,22 @@
   <title>negative Harmony</title>
 
   <!-- Generated javascript library includes -->
-  <script type="application/javascript" src="./heavy.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js"></script>
   <script src="https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js"></script>
   <script src="https://unpkg.com/@tonejs/midi@2.0.24"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
   <script type='text/javascript' src='https://platform-api.sharethis.com/js/sharethis.js#property=672a9419d01e2b00125529f4&product=sop' async='async'></script>
+  
+  <!-- New Modular System -->
+  <script type="application/javascript" src="./src/utils.js"></script>
+  <script type="application/javascript" src="./src/midi-manager.js"></script>
+  <script type="application/javascript" src="./src/audio-engine.js"></script>
+  <script type="application/javascript" src="./src/settings-manager.js"></script>
+  <script type="application/javascript" src="./src/transport.js"></script>
+  <script type="application/javascript" src="./src/app.js"></script>
+  
+  <!-- Legacy System (maintained for fallback safety) -->
   <script type="application/javascript" src="./main.js"></script>
   <script> 
     // initialize tooltips
@@ -44,8 +53,10 @@
 
                 link.href = "javascript:void(0);";
                 link.onclick = function() {
-                  preclean();
-                  checkForParamsInUrl(new URL(data[artist][song]).searchParams);
+                  app.modules.transport.preclean();
+                  const settingsManager = app.modules.settingsManager;
+                  settingsManager.checkForParamsInUrl(new URL(data[artist][song]).searchParams);
+                  // settingsManager.share();
                 };
                 link.textContent = song;
 
@@ -62,18 +73,15 @@
         .catch(error => console.error("Error loading examples:", error));
     });
   </script>
-  
-  
-
-  <link rel="stylesheet" href="style.css">
-  
+  <link rel="stylesheet" href="style.css">  
 </head>
 <body class="boxed">
+  <div class="sharethis-sticky-share-buttons" style="display: none;"></div>
   <div id="col_transport" class="col transport"
     style="position: sticky; top: 0; left: 0; width: 100%; height: 100vh; background: radial-gradient(circle, rgb(255, 255, 255) 0%, rgba(0, 0, 0, 0.687) 100%); z-index: 9999; display: flex; justify-content: center; align-items: center; overflow: hidden;">
     <div style="text-align: center;">
       <h3 id="start_prompt" style="color: red;">please click start here first:</h3>
-      <input type="checkbox" class="btn-check" id="transportButton" autocomplete="off" onchange="toggleTransport();" style="display: none;">
+      <input type="checkbox" class="btn-check" id="transportButton" autocomplete="off" onchange="toggleTransport();" style="display: none; visibility: hidden;">
       <label class="btn btn-outline-primary" id="transportLabel" for="transportButton">start</label>
     </div>
   </div>
@@ -84,9 +92,8 @@
     </div>
   </div>
   <div class="boxed remain widget horizontal" style="padding: 20px; min-height: 120px; -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); background-color: rgba(0, 0, 0, 0.361);">
-    <div class="sharethis-sticky-share-buttons"></div>
     <div style="display: flex; width: 100%;">
-      <a class="remain" style="display: none; box-shadow: 0 0 10px rgb(215, 118, 21); width: 50px; height: 50px; background-color: rgba(255, 255, 255, 0.359); border-radius: 3px; border: 1px solid white;" href="javascript:void(0);" onclick="share();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
+      <a class="remain" style="display: none; box-shadow: 0 0 10px rgb(215, 118, 21); width: 50px; height: 50px; background-color: rgba(255, 255, 255, 0.359); border-radius: 3px; border: 1px solid white;" href="javascript:void(0);" onclick="app.modules.settingsManager.shareAndCopy();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
       <button class="btn btn-outline-danger remain" id="playMidi" style="margin-left: 20px; min-height: 50px; color: rgb(255, 119, 0); font-weight: bold; background-color: rgba(156, 0, 0, 0.622); text-shadow: 0 0 15px rgb(63, 18, 18); flex-grow: 1;">Play MIDI</button>
     </div>
     <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0" class="form-range">
@@ -106,13 +113,12 @@
               <p><em>Upload a local file:</em></p>
               <input type="file" id="midiUpload" class="form-control" accept=".mid" style="margin-bottom: 10px;" />
               <p><em>...or try to paste an url here:<br>(e.g. from <a data-toggle="tooltip" href="https://bitmidi.com/" target="_blank" title="Thousands of MidiFiles from Classic over Rock/Pop until Jazz">bitmidi</a>, <a data-toggle="tooltip" href="https://www.mfiles.co.uk/midi-files.htm" target="_blank" title="Classical MidiFiles">mfiles</a> or <a data-toggle="tooltip" target="_blank"href="https://midikaos.mnstrl.org/" title="International folk music">Midikaos</a>).</em></p>
-              <div style="display: flex; align-items: center; margin-bottom: 10px; top: 172px; position: sticky;"><input type="text" id="midiUrl" style="margin-right: 10px;" class="form-control" placeholder="url to downloadable midi file" onkeypress="if(event.key === 'Enter') reloadWithUrl()"/><button class="btn btn-outline-secondary" onclick="reloadWithUrl()">load</button></button></div>
-              <button class="btn btn-outline-warning" id="resetSpeed" style="margin-bottom: 10px; display: none;" onclick="setSpeed(1.0)">reset speed to file</button>
+              <div style="display: flex; align-items: center; margin-bottom: 10px; top: 172px; position: sticky;"><input type="text" id="midiUrl" style="margin-right: 10px;" class="form-control" placeholder="search or paste url" onkeypress="if(event.key === 'Enter') reloadWithUrl()"/><button class="btn btn-outline-secondary" onclick="reloadWithUrl()">load</button></button></div>
+              <button class="btn btn-outline-warning" id="resetSpeed" style="margin-bottom: 10px; display: none;" onclick="app.modules.transport.setSpeed(1.0)">reset speed to file</button>
               <label for="speedControl">Playback Speed: </label>
               <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" class="form-range"/>
-              <input id="reverseMidi" class="btn-check" type="checkbox" disabled="true">
-                  <label class="btn btn-outline-light" for="reverseMidi">reverse disabled</label><br>
-                <a id="enableReversed" href="javascript:void(0);" onclick="enableReversedPlayback();">enable</a>
+              <input id="reverseMidi" class="btn-check" type="checkbox">
+                  <label class="btn btn-outline-light" for="reverseMidi">reverse</label><br>
             </div>
             <div>
               <div id="midiIn">
@@ -127,7 +133,7 @@
             <div style="text-align: center;">
               <div class="col events">
                 MIDI Panic:<br>
-                <button type="button" id="trigger_allNotesOff" class="btn btn-outline-warning" onclick="sendEvent_allNotesOff();">allNotesOff</button><br>
+                <button type="button" id="trigger_allNotesOff" class="btn btn-outline-warning" onclick="app.modules.midiManager.sendEvent_allNotesOff();">allNotesOff</button><br>
               </div>
             </div>
           </div>
@@ -146,7 +152,7 @@
             <div>
               <h2>Mode:</h2>
               <div>
-                <select class="form-select" id="parameter_mode" onchange="updateSlider_mode(this.value);">
+                <select class="form-select" id="parameter_mode" onchange="app.setMode(this.value);">
                 <option value="0.0">normal</option>
                 <option value="1.0" title="Mirrors notes around the axis of the middle D (C Major becomes A minor and vice versa).">lefthand Piano</option>
                 <option value="2.0" title="Mirrors notes around an axis between the 3rds of the root note (eg. C Major becomes C minor and vice versa)." selected>negative Harmony</option>
@@ -155,7 +161,7 @@
             </div>
             <div id="negRoots">
               <h3>Root:</h3>
-              <select class="form-select" id="parameter_negRoot" onchange="updateSelect_negRoot(this.value);">
+              <select class="form-select" id="parameter_negRoot" onchange="app.setNegRoot(this.value);">
                 <option value="57">Gb</option>
                 <option value="64">Db</option>
                 <option value="59">Ab</option>
@@ -174,7 +180,7 @@
               <h3>perOktave</h3>
               <div>
                 <input id="parameter_perOktave" class="btn-check" type="checkbox" checked
-                  onchange="updateSlider_perOktave(this.checked ? 1.0 : 0.0);">
+                  onchange="app.setPerOctave(this.checked ? 1.0 : 0.0);">
                   <label class="btn btn-outline-warning" for="parameter_perOktave">per Oktave</label><br>
               </div>
             </div>
@@ -193,7 +199,7 @@
           <div class="horizontal" style="margin-top: 20px;">
             <div>
             <label for="reverbSelect">Reverb: </label>
-            <select class="form-select" id="reverbSelect" onchange="setIR(this.value);">
+            <select class="form-select" id="reverbSelect" onchange="app.modules.audioEngine.setIR(this.value);">
               <option value="182806__unfa__ir-02-gunshot-in-a-chapel-mixed">Chapel</option>
               <option value="192228__ligidium__shower-clap-open">Shower</option>
               <option value="463610__greybrother01__winter-forest-01">Winterforest</option>
@@ -202,7 +208,7 @@
             </div>
             <div>
               <label for="reverbVolume">Reverb Volume: </label>
-              <input type="range" id="reverbVolume" min="0.0" max="1.5" step="0.01" value="0.5" oninput="setReverbGain(this.value);" class="form-range"/>
+              <input type="range" id="reverbVolume" min="0.0" max="1.5" step="0.01" value="0.5" oninput="app.modules.audioEngine.setReverbGain(this.value);" class="form-range"/>
             </div>
           </div>
         </div>
@@ -240,8 +246,7 @@
   </div>
 </div>
   <div class="row">
-    <span class="link"><em>powered by <a
-          href="https://github.com/Wasted-Audio/hvcc" target="_blank"><strong>heavy,</strong></a> <a href="https://tonejs.github.io/" target="_blank"><strong>Tone.js</strong></a> and <a href="https://github.com/surikov/webaudiofont" target="_blank"><strong>WebAudioFont</strong></a></em></span>
+    <span class="link"><em>powered by <a href="https://tonejs.github.io/" target="_blank"><strong>Tone.js</strong></a> and <a href="https://github.com/surikov/webaudiofont" target="_blank"><strong>WebAudioFont</strong></a></em></span>
     <span style="font-size: 0.8em;"><em>This project is open source and <a href="https://github.com/Reinissance/negative-Harmony">hosted on github</a>.</em></span>
   </div>
 </body>
