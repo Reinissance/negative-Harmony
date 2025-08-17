@@ -59,7 +59,6 @@ class SettingsManager {
         const reversed = urlParams.get('reversedPlayback');
         let keepReversed = false;
         if (reversed) {
-            this.app.makeReverseable();
             state.reversedPlayback = (reversed === "true");
             const reverseCheckbox = document.getElementById("reverseMidi");
             reverseCheckbox.checked = this.app.state.reversedPlayback;
