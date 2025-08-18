@@ -183,7 +183,7 @@ class NegativeHarmonyApp {
         // Check for URL parameters
         const urlParams = new URLSearchParams(window.location.search);
 
-        if (urlParams.size > 0) {
+        if (urlParams.toString().length > 0) {
             await this.modules.settingsManager.checkForParamsInUrl(urlParams);
             this.modules.settingsManager.share();
         }
