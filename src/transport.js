@@ -349,6 +349,9 @@ class Transport {
         // Get player from audio engine instead of global
         const audioEngine = this.app.modules.audioEngine;
         const player = audioEngine?.getPlayer();
+
+
+        let channelNoteRanges = new Map(); // Track note ranges per channel
         
         if (!player) {
             console.error('scheduleMIDIEvents: No player available from audio engine');
@@ -388,7 +391,6 @@ class Transport {
         // Get the loadedChannelControlValues from audio engine
         const loadedChannelControlValues = audioEngine?.getLoadedChannelControlValues() || new Map();
 
-        let lastNotes = [];
         // Loop through each track in the MIDI file
         midi.tracks.forEach((track, trackIndex) => {
             // exclude empty tracks
@@ -404,7 +406,7 @@ class Transport {
             // Schedule note events
             track.notes.forEach(note => {
                 const velocity = (channel === 9) ? Math.floor(note.velocity * 127) : Math.floor(Math.pow(note.velocity, 2) * 127);
-                const transformedMidi = (channel === 9) ? note.midi : this.app.transformNote(note.midi);
+                const transformedMidi = (channel === 9) ? note.midi : this.app.transformNote(note.midi, channel);
                 const noteEvent = {
                     type: 'note',
                     midi: transformedMidi,
@@ -523,31 +525,70 @@ class Transport {
                 });
             }
 
-            // key detection logic
-            if (state.negRoot === null) {
-                // Store the last notes played by the midi player to check the piece's key
-                if (track.notes.length > 0 && channel != 9) {
-                    const lastNote = track.notes[track.notes.length - 1].midi;
-                    if (lastNotes.length && lastNote.time > lastNotes[(lastNotes.length - 1)].time) {
+            // Store notes from all channels to track ranges
+            if (track.notes.length > 0 && channel != 9) {
+                // Initialize channel tracking if not exists
+                if (!channelNoteRanges.has(channel)) {
+                    channelNoteRanges.set(channel, {
+                        lowest: Infinity,
+                        highest: -Infinity,
+                        lastNotes: []
+                    });
+                }
+                
+                const channelData = channelNoteRanges.get(channel);
+                const lastNote = track.notes[track.notes.length - 1];
+                
+                // Track all notes in this track for range calculation
+                track.notes.forEach(note => {
+                    channelData.lowest = Math.min(channelData.lowest, note.midi);
+                    channelData.highest = Math.max(channelData.highest, note.midi);
+                });
+                
+                // Handle last notes for key detection (only if negRoot is null)
+                if (state.negRoot === null) {
+                    if (channelData.lastNotes.length && lastNote.time > channelData.lastNotes[channelData.lastNotes.length - 1].time) {
                         // clear the array if the last note is played later than the last note in the array
-                        lastNotes = [];
+                        channelData.lastNotes = [];
                     }
-                    if (!lastNotes.includes(lastNote)) {
-                        lastNotes.push(lastNote);
+                    if (!channelData.lastNotes.some(note => note.midi === lastNote.midi)) {
+                        channelData.lastNotes.push(lastNote);
                     }
                 }
             }
             //end of looping trackchannels
         });
 
-        // console.log ("LAST NOTES:", this.app.lastNotes, "negRoot:", state.negRoot);
+        // Store note ranges in the channel parts
+        Object.entries(channelParts).forEach(([channel, part]) => {
+            const channelNum = parseInt(channel);
+            // console.warn(`Storing note range for channel ${channel}:`, channelNoteRanges.get(channelNum));
+            if (channelNoteRanges.has(channelNum)) {
+                const rangeData = channelNoteRanges.get(channelNum);
+                part.noteRange = {
+                    lowest: rangeData.lowest,
+                    highest: rangeData.highest
+                };
+                part.channel = channelNum < 9 ? channelNum : channelNum - 1; // Store channel number in part, excluding drums channel
+            }
+            else {
+                console.warn(`No note range data for channel ${channelNum}!`);
+            }
+        });
 
-        // Check the piece's key
-        if (lastNotes.length > 0) {
-            // get the lowest note
-            const lowestNote = Math.min(...lastNotes);
+        // Key detection logic
+        // Collect all last notes from all channels
+        let allLastNotes = [];
+        channelNoteRanges.forEach((channelData) => {
+            allLastNotes = allLastNotes.concat(channelData.lastNotes);
+        });
+        
+        if (allLastNotes.length > 0) {
+            // get the lowest note across all channels
+            const lowestNote = Math.min(...allLastNotes.map(note => note.midi));
             // set root input to the lowest note
             const negRootSelect = document.getElementById("parameter_negRoot");
+            if (state.negRoot === null) {
             // find the options value that matches the lowest note
             for (const option of negRootSelect.options) {
                 if (parseInt(option.value - 3) % 12 === lowestNote % 12) {
@@ -556,7 +597,8 @@ class Transport {
                     negRootSelect.dispatchEvent(new Event('change'));
                     break;
                 }
-            }            
+            }
+            }
         }
 
         // Start all parts
@@ -571,6 +613,7 @@ class Transport {
 
     updateChannels() {
         this.parts.forEach(part => {
+            // console.log("Updating part:", part, "with channel:", part.channel);
             if (part._events) {
                 part._events.forEach(event => {
                     // Update notes
@@ -578,7 +621,7 @@ class Transport {
                     if (event.value && event.value.type === 'note' && event.value.channel !== 9) {
                         // console.log("Updating channel:", event.value.channel, "original note:", event.value.midi);
                         // Transform the note using the current app settings
-                        const transformedNote = this.app.transformNote(event.value.originalMidi);
+                        const transformedNote = this.app.transformNote(event.value.originalMidi, part.channel);
                         event.value.midi = transformedNote;
                         // console.log("Transformed to:", event.value.midi);
                     }

@@ -177,11 +177,13 @@
               </select>
             </div>
             <div id="perOkt">
-              <h3>perOktave</h3>
+              <h3>Inversion:</h3>
               <div>
-                <input id="parameter_perOktave" class="btn-check" type="checkbox" checked
-                  onchange="app.setPerOctave(this.checked ? 1.0 : 0.0);">
-                  <label class="btn btn-outline-warning" for="parameter_perOktave">per Oktave</label><br>
+                <select id="parameter_perOktave" class="form-select" onchange="app.setPerOctave(this.value);">
+                  <option value="0">Total</option>
+                  <option value="1" selected>per Octave</option>
+                  <option value="2">per Voice</option>
+                </select>
               </div>
             </div>
           </div>

@@ -86,8 +86,8 @@ class SettingsManager {
             // this.app.setPerOctave(parseFloat(perOktaveParam));
             state.perOktave = parseInt(perOktaveParam);
             this.debouncedUpdateUserSettings("perOktave", state.perOktave, -1);
-            const oktCheck = document.getElementById("parameter_perOktave");
-            oktCheck.checked = (state.perOktave === 1);
+            const oktSelect = document.getElementById("parameter_perOktave");
+            oktSelect.selectedIndex = state.perOktave;
         }
         
         const modeParam = urlParams.get('mode');
@@ -166,25 +166,21 @@ class SettingsManager {
         state.reversedPlayback = keepReversed;
     }
 
-    generateShareUrl() {
-        const state = this.app.state;
-        const url = state.midiFile;
+    // generateShareUrl() {
+    //     const state = this.app.state;
+    //     const url = state.midiFile;
 
-        const baseUrl = window.location.href.split('?')[0];
-        const shareUrl = Utils.generateShareUrl(baseUrl, state);
+    //     const baseUrl = window.location.href.split('?')[0];
+    //     const shareUrl = Utils.generateShareUrl(baseUrl, state);
         
-        Utils.updateShareUrl(shareUrl);
+    //     Utils.updateShareUrl(shareUrl);
         
-        return shareUrl;
-    }
+    //     return shareUrl;
+    // }
 
     share() {
-        let url = document.getElementById("midiUrl").value;
-        const state = this.app.state;
-        if (!url) {
-            url = state.midiFile
-        }
-        const shareUrl = this.generateShareUrl();
+        const baseUrl = window.location.href.split('?')[0];
+        const shareUrl = Utils.generateShareUrl(baseUrl, this.app.state);
         
         Utils.updateShareUrl(shareUrl);
 

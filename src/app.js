@@ -77,19 +77,20 @@ class NegativeHarmonyApp {
      * @param {number} note - MIDI note number (0-127)
      * @returns {number} - Transformed MIDI note number
      */
-    transformNote(note) {
+    transformNote(note, channel) {
         const { mode, negRoot, perOktave } = this.state;
-        
+
         switch (mode) {
             case 0: // Normal mode - no transformation
                 // console.log("Normal mode, returning note:", note);
                 return note;
                 
             case 1: // Inversion mode
-                return this.leftHandPianoNote(note, perOktave);
+                return this.leftHandPianoNote(note, perOktave, channel);
                 
             case 2: // Negative harmony mode
-                return this.negativeHarmonyTransform(note, perOktave, negRoot);
+                // console.log("Transforming note:", note, "Channel:", channel, "Mode:", mode, "NegRoot:", negRoot, "PerOktave:", perOktave);
+                return this.negativeHarmonyTransform(note, perOktave, negRoot, channel);
 
             default:
                 return note;
@@ -102,16 +103,50 @@ class NegativeHarmonyApp {
      * @param {number} perOktave - Inversion factor
      * @returns {number} - Inverted note
      */
-    leftHandPianoNote(note, perOktave) {
+    leftHandPianoNote(note, perOktave, channel) {
         if (!perOktave) {
             // console.log("No perOktave set, returning inverted note:", (82 - (note - 21)) + 21);
             return (82 - (note - 21)) + 21;
         } else {
-            const okt = Math.floor((note + 2) / 12) * 12;
-            let mod_note = ((82 - (note + 2 - 21)) + 21) % 12;
-            mod_note =(mod_note < 9) ? mod_note : mod_note - 12;
-            // console.log("Returning inverted note per octave:", okt + mod_note + 2);
-            return okt + mod_note + 2;
+            if (perOktave === 1) {
+                const okt = Math.floor((note + 2) / 12) * 12;
+                let mod_note = ((82 - (note + 2 - 21)) + 21) % 12;
+                mod_note = (mod_note < 9) ? mod_note : mod_note - 12;
+                // console.log("Returning inverted note per octave:", okt + mod_note + 2);
+                return okt + mod_note + 2;
+            } else if (perOktave === 2) {
+                // get the note's channel's range from transport modules. parts[] for per-voice inversion using channel-specific range
+                const rangeData = this.modules.transport.parts[channel]['noteRange'];
+                const rangeMiddle = (rangeData.lowest + rangeData.highest) / 2;
+                
+                // Find the D note closest to the middle of the range
+                // D notes are at MIDI numbers: 2, 14, 26, 38, 50, 62, 74, 86, 98, 110, 122
+                const dNotes = [];
+                for (let d = 2; d <= 122; d += 12) {
+                    dNotes.push(d);
+                }
+                
+                // Find the D closest to the range middle
+                let closestD = dNotes[0];
+                let minDistance = Math.abs(rangeMiddle - closestD);
+                
+                for (const d of dNotes) {
+                    const distance = Math.abs(rangeMiddle - d);
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestD = d;
+                    }
+                }
+                
+                // Invert around the closest D
+                // The axis is at closestD, so inversion formula is: 2 * axis - note
+                const invertedNote = 2 * closestD - note;
+                
+                return Math.max(0, Math.min(127, invertedNote)); // Clamp to valid MIDI range
+            } else {
+                // Fallback to original behavior
+                return note;
+            }
         }
     }
 
@@ -121,8 +156,8 @@ class NegativeHarmonyApp {
      * @param {number} negRoot - Negative root (0-11)
      * @returns {number} - Transformed note
      */
-    negativeHarmonyTransform(note, perOctave, negRoot) {
-        if (perOctave) {
+    negativeHarmonyTransform(note, perOctave, negRoot, channel) {
+        if (perOctave == 1) {
             const neg = (negRoot - 3) % 12; // this is for backwards compatibility - neg is the actual negative root
             const octave = Math.floor(note / 12);
             const semitone = note % 12;
@@ -149,10 +184,49 @@ class NegativeHarmonyApp {
 
             return transformedNote;
         }
-        else {
+        else if (perOctave == 2) {
+            // get the note's channel's range from transport modules. parts[] for per-voice inversion using channel-specific range
+            if (!this.modules.transport.parts[channel]) {
+                console.warn(`No note range data for channel ${channel}:`, this.modules.transport.parts);
+                // Fallback to perOctave=1 behavior, should be fixed in transport.js, line 572
+                return this.negativeHarmonyTransform(note, 1, negRoot, channel);
+            }
+            const rangeData = this.modules.transport.parts[channel]['noteRange'];
+            const rangeMiddle = (rangeData.lowest + rangeData.highest) / 2;
+            
+            // Calculate the axis based on negRoot, but positioned at the range middle
+            const neg = (negRoot - 3) % 12; // backwards compatibility
+            const axisSemitone = (neg + 3.5) % 12; // same axis calculation as perOctave == 1
+            
+            // Find the note with axisSemitone that's closest to the range middle
+            const axisOctaves = [];
+            for (let octave = 0; octave <= 10; octave++) {
+                const axisNote = octave * 12 + axisSemitone;
+                if (axisNote >= 0 && axisNote <= 127) {
+                    axisOctaves.push(axisNote);
+                }
+            }
+        
+            // Find the axis note closest to the range middle
+            let closestAxis = axisOctaves[0];
+            let minDistance = Math.abs(rangeMiddle - closestAxis);
+            
+            for (const axisNote of axisOctaves) {
+                const distance = Math.abs(rangeMiddle - axisNote);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestAxis = axisNote;
+                }
+            }
+            
+            // Reflect the note across the closest axis
+            const transformedNote = 2 * closestAxis - note;
+            
+            return Math.max(0, Math.min(127, transformedNote)); // Clamp to valid MIDI range
+        } else {
             // For non-perOctave mode, just reflect the note across negRoot + 0.5
             const reflectedNote = 2 * negRoot - note + 1;
-            console.log("Reflected note:", reflectedNote, "from original note:", note, "with negRoot:", negRoot);
+            // console.log("Reflected note:", reflectedNote, "from original note:", note, "with negRoot:", negRoot);
             return reflectedNote;
         }
     }
