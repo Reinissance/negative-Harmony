@@ -9,6 +9,7 @@ class Transport {
         this.playing = false;
         this.parts = [];
         this.progressSlider = null;
+        this.forceUpdateChannel = false; // Flag to force update channel ranges
     }
 
     async init() {
@@ -572,7 +573,8 @@ class Transport {
                 part.channel = channelNum < 9 ? channelNum : channelNum - 1; // Store channel number in part, excluding drums channel
             }
             else {
-                console.warn(`No note range data for channel ${channelNum}!`);
+                console.warn(`No note range data for channel ${channelNum}!`); // should never happen... Haha
+                this.forceUpdateChannel = true; // Set flag to force update channel ranges later
             }
         });
 

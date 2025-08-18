@@ -189,6 +189,7 @@ class NegativeHarmonyApp {
             if (!this.modules.transport.parts[channel]) {
                 console.warn(`No note range data for channel ${channel}:`, this.modules.transport.parts);
                 // Fallback to perOctave=1 behavior, should be fixed in transport.js, line 572
+                this.modules.transport.forceUpdateChannel = true;
                 return this.negativeHarmonyTransform(note, 1, negRoot, channel);
             }
             const rangeData = this.modules.transport.parts[channel]['noteRange'];

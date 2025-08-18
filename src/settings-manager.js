@@ -88,6 +88,7 @@ class SettingsManager {
             this.debouncedUpdateUserSettings("perOktave", state.perOktave, -1);
             const oktSelect = document.getElementById("parameter_perOktave");
             oktSelect.selectedIndex = state.perOktave;
+            console.error("perOktave:", state.perOktave);
         }
         
         const modeParam = urlParams.get('mode');
@@ -147,6 +148,12 @@ class SettingsManager {
             await this.loadMidiFileFromUrl(midiFileUrl, urlParams);
             document.getElementById("hiddenShareButton").style.display = "block";
             this.debouncedUpdateUserSettings("midiFile", midiFileUrl, -1);
+            const transport = this.app.modules.transport;
+            if (transport.forceUpdateChannel) {
+                transport.updateChannels();
+                // console.error("Forcing update of channel ranges after loading MIDI file.");
+                transport.forceUpdateChannel = false;
+            }
         } else {
             // No MIDI file, load default piano
             Utils.setPlayButtonActive(true);
@@ -166,21 +173,21 @@ class SettingsManager {
         state.reversedPlayback = keepReversed;
     }
 
-    // generateShareUrl() {
-    //     const state = this.app.state;
-    //     const url = state.midiFile;
-
-    //     const baseUrl = window.location.href.split('?')[0];
-    //     const shareUrl = Utils.generateShareUrl(baseUrl, state);
-        
-    //     Utils.updateShareUrl(shareUrl);
-        
-    //     return shareUrl;
-    // }
-
     share() {
         const baseUrl = window.location.href.split('?')[0];
-        const shareUrl = Utils.generateShareUrl(baseUrl, this.app.state);
+    
+        // Flatten the state structure for URL parameters
+        const urlParams = { ...this.app.state };
+        
+        // Move channels from userSettings.channels to top-level channels
+        if (this.app.state.userSettings && this.app.state.userSettings.channels) {
+            urlParams.channels = this.app.state.userSettings.channels;
+        }
+        
+        // Remove userSettings from URL params since we've extracted what we need
+        delete urlParams.userSettings;
+        
+        const shareUrl = Utils.generateShareUrl(baseUrl, urlParams);
         
         Utils.updateShareUrl(shareUrl);
 
