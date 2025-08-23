@@ -10,6 +10,7 @@ class Transport {
         this.parts = [];
         this.progressSlider = null;
         this.forceUpdateChannel = false; // Flag to force update channel ranges
+        this.originalMidi = null;
     }
 
     async init() {
@@ -334,6 +335,9 @@ class Transport {
     }
 
     scheduleMIDIEvents(midi) {
+        console.log('Scheduling MIDI events:', midi);
+        this.originalMidi = midi;
+
         // Clear any previous scheduled parts
         this.parts.forEach(part => part.dispose());
         this.parts = [];
@@ -613,6 +617,73 @@ class Transport {
         });
     }
 
+    setProgramChange(channel, programNumber) {
+        // Convert channel to number to ensure proper comparison
+        const channelNum = parseInt(channel);
+        const part = this.parts.find(p => p.channel === channelNum);
+        if (part) {
+        
+            // Get the events array from the part
+            const events = part._events;
+            let programChangeEvent = null;
+            
+            // Search through the events to delete all program change events
+            for (let i = 0; i < events.length; i++) {
+                // Find all program change events
+                const event = events.get(i);
+                if (event && event.value && event.value.type === 'programChange') {
+                    event.original = { number: event.value.number };
+                    events.number = programNumber; // Update to new program number
+                    i--; // Decrement i to account for the removed event
+                }
+            }
+        }
+    }
+
+    setControlChange(channel, number, value) {
+        
+        // Convert channel to number to ensure proper comparison
+        const channelNum = parseInt(channel);
+        const part = this.parts.find(p => p.channel === channelNum);
+        
+        if (part) {
+            // Get the events array from the part
+            const events = part._events;
+
+            // loop through the events to find all control change with the same number to delete it
+            for (let i = 0; i < events.length; i++) {
+                const event = events.get(i);
+                if (event && event.value && event.value.type === 'controlChange' && event.value.number === parseInt(number)) {
+                    event.original = { number: event.value.number, value: event.value.value };
+                    events.value.number = parseInt(number);
+                    events.value.value = parseInt(value);
+                    i--; // Decrement i to account for the removed event
+                }
+            }
+        } else {
+            console.warn("No part found for channel:", channelNum);
+        }
+    }
+
+    restoreOriginalValuesForChannel(channel) {
+        const channelNum = parseInt(channel);
+        const part = this.parts.find(p => p.channel === channelNum);
+        if (part) {
+            const events = part._events;
+            for (let i = 0; i < events.length; i++) {
+                const event = events.get(i);
+                if (event && event.original && event.value.number) {
+                    event.value.number = event.original.number;
+                    console.log("Restored original number for event:", event);
+                }
+                if (event && event.original && event.value.value) {
+                    event.value.value = event.original.value;
+                    console.log("Restored original value for event:", event);
+                }
+            }
+        }
+    }
+
     updateChannels() {
         this.parts.forEach(part => {
             // console.log("Updating part:", part, "with channel:", part.channel);
@@ -657,6 +728,188 @@ class Transport {
         this.parts.forEach(part => part.dispose());
         this.parts = [];
     }
+
+    downloadCurrentMidi() {
+    try {
+        if (!this.originalMidi) {
+            alert('No original MIDI data available for export');
+            return;
+        }
+
+        console.log('Creating new MIDI file from original with updated data:', this.app.state.userSettings);
+
+        // Create a new empty MIDI file
+        const midi = new Midi();
+        
+        console.log('Adding tracks with current transformations...');
+        
+        // Process each track from the original MIDI
+        this.originalMidi.tracks.forEach((originalTrack, trackIndex) => {
+            const channel = originalTrack.channel;
+            
+            // Create a new track
+            const track = midi.addTrack();
+            track.name = originalTrack.name || `Track ${trackIndex}`;
+            track.channel = channel;
+            
+            // Add notes with current transformations
+            originalTrack.notes.forEach(note => {
+                let transformedMidi = note.midi;
+                if (channel !== 9) { // Skip drums channel
+                    transformedMidi = this.app.transformNote(note.midi, channel);
+                }
+                
+                track.addNote({
+                    midi: transformedMidi,
+                    time: note.time,
+                    duration: note.duration,
+                    velocity: note.velocity
+                });
+            });
+            
+            // Add control changes using current user settings
+            if (originalTrack.controlChanges) {
+                const trackSettings = this.app.state.userSettings["channels"][channel];
+                let volSet = false;
+                let revSet = false;
+                let panSet = false;
+                const volSliderId = "volumeSlider_" + channel;
+                const panSliderId = "panSlider_" + channel;
+                const reverbSliderId = "reverbSlider_" + channel;
+
+                Object.entries(originalTrack.controlChanges).forEach(([ccNumber, ccEvents]) => {
+                    ccEvents.forEach(cc => {
+                        let currentValue = cc.value * 127;
+
+                        // Use current track setting value if available
+                        if (trackSettings !== undefined) {
+                            if (ccNumber == 7 && trackSettings[volSliderId] !== undefined) {
+                                currentValue = parseInt(trackSettings[volSliderId]);
+                                console.log('Using volume slider value:', currentValue);
+                                volSet = true;
+                            }
+                            else if (ccNumber == 10 && trackSettings[panSliderId] !== undefined) {
+                                currentValue = parseInt(trackSettings[panSliderId]) * 127;
+                                console.log('Using pan slider value:', currentValue);
+                                panSet = true;
+                            }
+                            else if (ccNumber == 91 && trackSettings[reverbSliderId] !== undefined) {
+                                currentValue = parseInt(trackSettings[reverbSliderId]) * 127;
+                                console.log('Using reverb slider value:', currentValue);
+                                revSet = true;
+                            }
+                        }
+                        console.log("Handling CC:", ccNumber, "Value:", currentValue, trackSettings);
+                        
+                        track.addCC({
+                            number: parseInt(ccNumber),
+                            value: currentValue,
+                            time: cc.time
+                        });
+                    });
+                });
+
+
+                if (!volSet && trackSettings !== undefined && trackSettings[volSliderId] !== undefined) {
+                    track.addCC({
+                        number: 7,
+                        value: parseInt(trackSettings[volSliderId]),
+                        time: 0
+                    });
+                    console.log("added missing volume CC:", parseInt(trackSettings[volSliderId]) * 127);
+                }
+                if (!panSet && trackSettings !== undefined && trackSettings[panSliderId] !== undefined) {
+                    track.addCC({
+                        number: 10,
+                        value: parseInt(trackSettings[panSliderId]) * 127,
+                        time: 0
+                    });
+                    console.log("added missing pan CC:", parseInt(trackSettings[panSliderId]) * 127);
+                }
+                if (!revSet && trackSettings !== undefined && trackSettings[reverbSliderId] !== undefined) {
+                    track.addCC({
+                        number: 91,
+                        value: parseInt(trackSettings[reverbSliderId]) * 127,
+                        time: 0
+                    });
+                    console.log("added missing reverb CC:", parseInt(trackSettings[reverbSliderId]) * 127);
+                }
+            }
+            
+            // Add pitch bends with transformations
+            if (originalTrack.pitchBends && originalTrack.pitchBends.length > 0) {
+                originalTrack.pitchBends.forEach(bend => {
+                    const state = this.app.state;
+                    let transformedValue = bend.value;
+                    
+                    // Apply pitch bend transformation based on current mode
+                    if (state.mode !== 0) { // If not in normal mode
+                        const normal = this.app.normal;
+                        const factor = (!normal) ? -1 : 1;
+                        // Convert from MIDI pitch bend range back to normalized range
+                        const normalizedValue = (bend.value / 8192) - 1;
+                        transformedValue = (normalizedValue * factor + 1) * 8192;
+                    }
+                    
+                    track.addPitchBend({
+                        value: transformedValue,
+                        time: bend.time
+                    });
+                });
+            }
+            
+            // Set instrument using current user settings
+            let programNumber = originalTrack.instrument?.number;
+            const userSettings = this.app.state.userSettings;
+            
+            // Use current program change setting if available
+            const upId = "instrumentSelect_" + channel;
+            if (userSettings && userSettings.channels && userSettings.channels[channel] && userSettings.channels[channel][upId] !== undefined) {
+                programNumber = parseInt(userSettings.channels[channel][upId]);
+                console.log('Using instrument select value:', programNumber);
+            } else {
+                console.log("no instrument select setting found:", upId, userSettings);
+            }
+            
+            if (programNumber !== undefined) {
+                track.instrument = {
+                    number: programNumber
+                };
+            }
+            
+            console.log(`Added track ${trackIndex} (channel ${channel}) with ${originalTrack.notes.length} notes`);
+        });
+        
+        // Update tempo if speed has changed
+        const state = this.app.state;
+        if (state.speed !== 1.0) {
+            // Apply speed to existing tempos
+            midi.header.tempos.forEach(tempo => {
+                tempo.bpm = tempo.bpm * state.speed;
+            });
+            console.log(`Updated tempo by speed factor: ${state.speed}`);
+        }
+        
+        console.log('Exporting MIDI file...');
+        const arrayBuffer = midi.toArray();
+        const blob = new Blob([arrayBuffer], { type: 'audio/midi' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'negative_harmony.mid';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        console.log('MIDI file exported successfully');
+        
+    } catch (error) {
+        console.error('Error creating MIDI file:', error);
+        console.error('Error stack:', error.stack);
+        alert('Failed to create MIDI file. Please check the console for details.');
+    }
+}
 }
 
 // Export for module usage

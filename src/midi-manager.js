@@ -35,7 +35,7 @@ class MidiManager {
                 this.onMIDIFailure(error);
             }
         } else {
-            console.warn('MIDI not supported in this browser');
+            this.onMIDIFailure('MIDI not supported in this browser');
         }
     }
 
@@ -122,11 +122,6 @@ class MidiManager {
             if (load) {
                 const reader = new FileReader();
                 reader.onload = (e) => {
-                    // Reset user settings through settings manager
-                    const settingsManager = this.app.modules.settingsManager;
-                    if (settingsManager) {
-                        settingsManager.resetUserSettings();
-                    }
 
                     this.app.localFile = true;
 
@@ -215,7 +210,7 @@ class MidiManager {
     onMIDIFailure(msg) {
         document.getElementById("midiIn").innerHTML = "No extern MIDI available.";
         document.getElementById("midiOut").innerHTML = "";
-        console.error(`Failed to get MIDI access - ${msg}`);
+        console.warn(`Failed to get MIDI access - ${msg}`);
     }
 
     onMIDIMessage(message) {

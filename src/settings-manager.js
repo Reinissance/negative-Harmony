@@ -88,7 +88,6 @@ class SettingsManager {
             this.debouncedUpdateUserSettings("perOktave", state.perOktave, -1);
             const oktSelect = document.getElementById("parameter_perOktave");
             oktSelect.selectedIndex = state.perOktave;
-            console.error("perOktave:", state.perOktave);
         }
         
         const modeParam = urlParams.get('mode');
@@ -450,6 +449,8 @@ class SettingsManager {
                 let slider = event.target;
                 let channel = slider.getAttribute('data-channel');
                 loadedChannelInstruments.get(Number(channel)).gainNode.gain.value = slider.value / 127;
+                this.app.modules.transport.setControlChange(channel, 7, slider.value);
+                this.showResetButtonIfNeeded(channel);
                 document.getElementById("volume_label_" + channel).innerHTML = `Volume: ${(slider.value / 127).toFixed(2)}`;
                 this.debouncedUpdateUserSettings(slider.id, slider.value, channel);
             }
@@ -465,6 +466,8 @@ class SettingsManager {
                 let slider = event.target;
                 let channel = slider.getAttribute('data-channel');
                 loadedChannelInstruments.get(Number(channel)).panNode.pan.value = slider.value;
+                this.app.modules.transport.setControlChange(channel, 10, slider.value);
+                this.showResetButtonIfNeeded(channel);
                 document.getElementById("pan_label_" + channel).innerHTML = `Panning: ${parseFloat(slider.value).toFixed(2)}`;
                 this.debouncedUpdateUserSettings(slider.id, slider.value, channel);
             }
@@ -478,6 +481,8 @@ class SettingsManager {
                 let slider = event.target;
                 let channel = slider.getAttribute('data-channel');
                 loadedChannelInstruments.get(Number(channel)).reverbSendGainNode.gain.value = slider.value;
+                this.app.modules.transport.setControlChange(channel, 91, slider.value);
+                this.showResetButtonIfNeeded(channel);
                 document.getElementById("reverb_label_" + channel).innerHTML = `Reverb Send: ${parseFloat(slider.value).toFixed(2)}`;
                 this.debouncedUpdateUserSettings(slider.id, slider.value, channel);
             }
@@ -695,7 +700,8 @@ class SettingsManager {
 
     resetChannelSettings(channel) {
         const fileSettings = this.app.fileSettings;
-        
+        console.log("Restoring original settings for channel:", channel, fileSettings);
+
         if (fileSettings[channel]) {
             for (const setting in fileSettings[channel]) {
                 let value = fileSettings[channel][setting];
@@ -714,10 +720,12 @@ class SettingsManager {
                 }
             }
         }
-        
+
+        this.app.modules.transport.restoreOriginalValuesForChannel(channel);
+
         // Remove channel from user settings
-        if (state.userSettings.channels[channel]) {
-            delete state.userSettings.channels[channel];
+        if (this.app.state.userSettings.channels[channel]) {
+            delete this.app.state.userSettings.channels[channel];
         }
         
         // Hide reset button

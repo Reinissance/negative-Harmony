@@ -14,6 +14,7 @@ class AudioEngine {
         this.drumInstrument = null;
         this.availableDrumSoundsForNote = new Map();
         this.loadedChannelControlValues = new Map();
+        this._presetPromiseCache = new Map(); // url -> Promise
     }
 
     async init() {
@@ -211,46 +212,58 @@ class AudioEngine {
                 this.loadedChannelInstruments.get(channel).preset = preset;
                 this.loadedChannelInstruments.get(channel).sfIndex = select.selectedIndex;
                 
-                // Update settings through the settings manager
-                const settingsManager = this.app.modules.settingsManager;
-                if (settingsManager) {
-                    settingsManager.debouncedUpdateUserSettings(select.id, select.value, channel);
-                    settingsManager.showResetButtonIfNeeded(channel);
+                
+                if (!event.target.classList.contains("fromFile")) {
+                    // Update settings through the settings manager
+                    const settingsManager = this.app.modules.settingsManager;
+                    if (settingsManager) {
+                        settingsManager.debouncedUpdateUserSettings(event.target.id, event.target.value, channel);
+                        settingsManager.showResetButtonIfNeeded(channel);
+                    }
+                } else {
+                    // Remove "fromFile" class
+                    event.target.classList.remove("fromFile");
                 }
             })
             .catch((error) => console.error('Error loading preset:', error));
-    }
 
-    onchangeForChannel(event, channel) {
-        this.loadInstrumentsForProgramChange(channel, event.target.selectedIndex, 0, event.target.options[event.target.selectedIndex].text);
-        
-        // Update options for the soundfont select
-        let select = document.getElementById("sfIndex_" + channel);
-        select.innerHTML = "";
-        this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).urls.forEach((name, i) => {
-            let option = document.createElement("option");
-            option.value = i;
-            option.text = name;
-            select.appendChild(option);
-        });
-        
-        let preset = this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).urls[0];
-        this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).preset = "_tone_" + preset;
-        this.loadedChannelInstruments.get(channel).preset = "_tone_" + preset;
-        this.loadedChannelInstruments.get(channel).programNumber = event.target.selectedIndex;
-        
-        if (!event.target.classList.contains("fromFile")) {
-            // Update settings through the settings manager
-            const settingsManager = this.app.modules.settingsManager;
-            if (settingsManager) {
-                settingsManager.debouncedUpdateUserSettings(event.target.id, event.target.value, channel);
-                settingsManager.showResetButtonIfNeeded(channel);
-            }
-        } else {
-            // Remove "fromFile" class
-            event.target.classList.remove("fromFile");
+        // inject the programchange to the channel part in transport
+        const transport = this.app.modules.transport;
+        if (transport) {
+            transport.setProgramChange(channel, programNumber);
         }
     }
+
+    // onchangeForChannel(event, channel) {
+    //     this.loadInstrumentsForProgramChange(channel, event.target.selectedIndex, 0, event.target.options[event.target.selectedIndex].text);
+        
+    //     // Update options for the soundfont select
+    //     let select = document.getElementById("sfIndex_" + channel);
+    //     select.innerHTML = "";
+    //     this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).urls.forEach((name, i) => {
+    //         let option = document.createElement("option");
+    //         option.value = i;
+    //         option.text = name;
+    //         select.appendChild(option);
+    //     });
+        
+    //     let preset = this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).urls[0];
+    //     this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).preset = "_tone_" + preset;
+    //     this.loadedChannelInstruments.get(channel).preset = "_tone_" + preset;
+    //     this.loadedChannelInstruments.get(channel).programNumber = event.target.selectedIndex;
+        
+    //     if (!event.target.classList.contains("fromFile")) {
+    //         // Update settings through the settings manager
+    //         const settingsManager = this.app.modules.settingsManager;
+    //         if (settingsManager) {
+    //             settingsManager.debouncedUpdateUserSettings(event.target.id, event.target.value, channel);
+    //             settingsManager.showResetButtonIfNeeded(channel);
+    //         }
+    //     } else {
+    //         // Remove "fromFile" class
+    //         event.target.classList.remove("fromFile");
+    //     }
+    // }
 
     // Getters for other modules
     getDrumInstrument() {
@@ -403,13 +416,10 @@ class AudioEngine {
                 panNode: panNode 
             };
             
-            // Set file settings if available
-            if (typeof this.app.fileSettings !== 'undefined') {
-                const resetSetting = this.app.fileSettings[9] || {};
-                resetSetting["volumeSlider_drum"] = 127.0;
-                resetSetting["panSlider_drum"] = 0.0;
-                this.app.fileSettings[9] = resetSetting;
-            }
+            const resetSetting = this.app.fileSettings[9] || {};
+            resetSetting["volumeSlider_drum"] = 127.0;
+            resetSetting["panSlider_drum"] = 0.0;
+            this.app.fileSettings[9] = resetSetting;
         }
         this.drumInstrument.notes.set(note, preset);
     }
@@ -471,14 +481,11 @@ class AudioEngine {
         gainNode.connect(panNode);
         panNode.connect(audioContext.destination);
         
-        // Create default reset settings for the channel
-        if (typeof fileSettings !== 'undefined') {
-            const resetSetting = fileSettings[channel] || {};
-            resetSetting["volumeSlider_" + channel] = 127.0;
-            resetSetting["reverbSlider_" + channel] = 0.7;
-            resetSetting["panSlider_" + channel] = 0.0;
-            fileSettings[channel] = resetSetting;
-        }
+        const resetSetting = this.app.fileSettings[channel] || {};
+        resetSetting["volumeSlider_" + channel] = 127.0;
+        resetSetting["reverbSlider_" + channel] = 0.7;
+        resetSetting["panSlider_" + channel] = 0.0;
+        this.app.fileSettings[channel] = resetSetting;
 
         // Create and connect reverb send gain node
         const reverbSendGainNode = this.createReverbSendGainNode();
