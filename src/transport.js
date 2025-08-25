@@ -743,6 +743,9 @@ class Transport {
         
         console.log('Adding tracks with current transformations...');
         
+        const state = this.app.state;
+        const speedFactor = state.speed;
+        
         // Process each track from the original MIDI
         this.originalMidi.tracks.forEach((originalTrack, trackIndex) => {
             const channel = originalTrack.channel;
@@ -752,7 +755,7 @@ class Transport {
             track.name = originalTrack.name || `Track ${trackIndex}`;
             track.channel = channel;
             
-            // Add notes with current transformations
+            // Add notes with current transformations and speed adjustment
             originalTrack.notes.forEach(note => {
                 let transformedMidi = note.midi;
                 if (channel !== 9) { // Skip drums channel
@@ -761,13 +764,13 @@ class Transport {
                 
                 track.addNote({
                     midi: transformedMidi,
-                    time: note.time,
-                    duration: note.duration,
+                    time: note.time / speedFactor,  // Scale time by speed
+                    duration: note.duration / speedFactor,  // Scale duration by speed
                     velocity: note.velocity
                 });
             });
             
-            // Add control changes using current user settings
+            // Add control changes using current user settings and speed adjustment
             if (originalTrack.controlChanges) {
                 const trackSettings = this.app.state.userSettings["channels"][channel];
                 let volSet = false;
@@ -804,11 +807,10 @@ class Transport {
                         track.addCC({
                             number: parseInt(ccNumber),
                             value: currentValue,
-                            time: cc.time
+                            time: cc.time / speedFactor  // Scale time by speed
                         });
                     });
                 });
-
 
                 if (!volSet && trackSettings !== undefined && trackSettings[volSliderId] !== undefined) {
                     track.addCC({
@@ -836,10 +838,9 @@ class Transport {
                 }
             }
             
-            // Add pitch bends with transformations
+            // Add pitch bends with transformations and speed adjustment
             if (originalTrack.pitchBends && originalTrack.pitchBends.length > 0) {
                 originalTrack.pitchBends.forEach(bend => {
-                    const state = this.app.state;
                     let transformedValue = bend.value;
                     
                     // Apply pitch bend transformation based on current mode
@@ -853,7 +854,7 @@ class Transport {
                     
                     track.addPitchBend({
                         value: transformedValue,
-                        time: bend.time
+                        time: bend.time / speedFactor  // Scale time by speed
                     });
                 });
             }
@@ -880,14 +881,24 @@ class Transport {
             console.log(`Added track ${trackIndex} (channel ${channel}) with ${originalTrack.notes.length} notes`);
         });
         
-        // Update tempo if speed has changed
-        const state = this.app.state;
-        if (state.speed !== 1.0) {
-            // Apply speed to existing tempos
-            midi.header.tempos.forEach(tempo => {
-                tempo.bpm = tempo.bpm * state.speed;
-            });
-            console.log(`Updated tempo by speed factor: ${state.speed}`);
+        // Update header tempos and time signatures with speed adjustment
+        if (speedFactor !== 1.0) {
+            // Scale tempo events
+            if (midi.header.tempos && midi.header.tempos.length > 0) {
+                midi.header.tempos.forEach(tempo => {
+                    tempo.time = tempo.time / speedFactor;  // Scale tempo change time
+                    // Note: tempo.bpm stays the same since we're scaling time instead
+                });
+            }
+            
+            // Scale time signature events
+            if (midi.header.timeSignatures && midi.header.timeSignatures.length > 0) {
+                midi.header.timeSignatures.forEach(timeSig => {
+                    timeSig.time = timeSig.time / speedFactor;  // Scale time signature change time
+                });
+            }
+            
+            console.log(`Scaled all event times by speed factor: ${speedFactor}`);
         }
         
         console.log('Exporting MIDI file...');

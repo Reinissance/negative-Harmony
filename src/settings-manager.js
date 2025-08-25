@@ -194,6 +194,7 @@ class SettingsManager {
         if (shares) {
             shares.style.display = "block";
         }
+        document.getElementById("hiddenShareButton").style.display = "block";
 
         return shareUrl;
     }

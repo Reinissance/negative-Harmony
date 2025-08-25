@@ -62,7 +62,6 @@ function reloadWithUrl() {
                 app.modules.midiManager.parseMidiFile(new Midi(data));
                 app.modules.settingsManager.share();
                 document.getElementById("midiUrl").value = midiFileUrl;
-                document.getElementById("hiddenShareButton").style.display = "block";
                 Utils.setPlayButtonActive(true);
             })
             .catch(error => {
