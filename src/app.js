@@ -28,7 +28,7 @@ class NegativeHarmonyApp {
             userSettings: { "channels": {} },
             negRoot: null,
             mode: 2,    // Default mode
-            perOktave: 1, // Default per octave value
+            perOktave: 2, // Default per voice value
         };
     }
 

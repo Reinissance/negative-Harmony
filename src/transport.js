@@ -729,198 +729,211 @@ class Transport {
         this.parts = [];
     }
 
-    downloadCurrentMidi() {
-    try {
-        if (!this.originalMidi) {
-            alert('No original MIDI data available for export');
+    downloadCurrentMidi () {
+
+        const midi = this.createCurrentMidi();
+        const name = this.originalMidi.header.name + "_negative_harmony.mid" || "negative_harmony.mid";
+        if (!midi) {
+            console.error('Failed to create MIDI file');
             return;
         }
 
-        console.log('Creating new MIDI file from original with updated data:', this.app.state.userSettings);
-
-        // Create a new empty MIDI file
-        const midi = new Midi();
-        
-        console.log('Adding tracks with current transformations...');
-        
-        const state = this.app.state;
-        const speedFactor = state.speed;
-        
-        // Process each track from the original MIDI
-        this.originalMidi.tracks.forEach((originalTrack, trackIndex) => {
-            const channel = originalTrack.channel;
-            
-            // Create a new track
-            const track = midi.addTrack();
-            track.name = originalTrack.name || `Track ${trackIndex}`;
-            track.channel = channel;
-            
-            // Add notes with current transformations and speed adjustment
-            originalTrack.notes.forEach(note => {
-                let transformedMidi = note.midi;
-                if (channel !== 9) { // Skip drums channel
-                    transformedMidi = this.app.transformNote(note.midi, channel);
-                }
-                
-                track.addNote({
-                    midi: transformedMidi,
-                    time: note.time / speedFactor,  // Scale time by speed
-                    duration: note.duration / speedFactor,  // Scale duration by speed
-                    velocity: note.velocity
-                });
-            });
-            
-            // Add control changes using current user settings and speed adjustment
-            if (originalTrack.controlChanges) {
-                const trackSettings = this.app.state.userSettings["channels"][channel];
-                let volSet = false;
-                let revSet = false;
-                let panSet = false;
-                const volSliderId = "volumeSlider_" + channel;
-                const panSliderId = "panSlider_" + channel;
-                const reverbSliderId = "reverbSlider_" + channel;
-
-                Object.entries(originalTrack.controlChanges).forEach(([ccNumber, ccEvents]) => {
-                    ccEvents.forEach(cc => {
-                        let currentValue = cc.value * 127;
-
-                        // Use current track setting value if available
-                        if (trackSettings !== undefined) {
-                            if (ccNumber == 7 && trackSettings[volSliderId] !== undefined) {
-                                currentValue = parseInt(trackSettings[volSliderId]);
-                                console.log('Using volume slider value:', currentValue);
-                                volSet = true;
-                            }
-                            else if (ccNumber == 10 && trackSettings[panSliderId] !== undefined) {
-                                currentValue = parseInt(trackSettings[panSliderId]) * 127;
-                                console.log('Using pan slider value:', currentValue);
-                                panSet = true;
-                            }
-                            else if (ccNumber == 91 && trackSettings[reverbSliderId] !== undefined) {
-                                currentValue = parseInt(trackSettings[reverbSliderId]) * 127;
-                                console.log('Using reverb slider value:', currentValue);
-                                revSet = true;
-                            }
-                        }
-                        console.log("Handling CC:", ccNumber, "Value:", currentValue, trackSettings);
-                        
-                        track.addCC({
-                            number: parseInt(ccNumber),
-                            value: currentValue,
-                            time: cc.time / speedFactor  // Scale time by speed
-                        });
-                    });
-                });
-
-                if (!volSet && trackSettings !== undefined && trackSettings[volSliderId] !== undefined) {
-                    track.addCC({
-                        number: 7,
-                        value: parseInt(trackSettings[volSliderId]),
-                        time: 0
-                    });
-                    console.log("added missing volume CC:", parseInt(trackSettings[volSliderId]) * 127);
-                }
-                if (!panSet && trackSettings !== undefined && trackSettings[panSliderId] !== undefined) {
-                    track.addCC({
-                        number: 10,
-                        value: parseInt(trackSettings[panSliderId]) * 127,
-                        time: 0
-                    });
-                    console.log("added missing pan CC:", parseInt(trackSettings[panSliderId]) * 127);
-                }
-                if (!revSet && trackSettings !== undefined && trackSettings[reverbSliderId] !== undefined) {
-                    track.addCC({
-                        number: 91,
-                        value: parseInt(trackSettings[reverbSliderId]) * 127,
-                        time: 0
-                    });
-                    console.log("added missing reverb CC:", parseInt(trackSettings[reverbSliderId]) * 127);
-                }
-            }
-            
-            // Add pitch bends with transformations and speed adjustment
-            if (originalTrack.pitchBends && originalTrack.pitchBends.length > 0) {
-                originalTrack.pitchBends.forEach(bend => {
-                    let transformedValue = bend.value;
-                    
-                    // Apply pitch bend transformation based on current mode
-                    if (state.mode !== 0) { // If not in normal mode
-                        const normal = this.app.normal;
-                        const factor = (!normal) ? -1 : 1;
-                        // Convert from MIDI pitch bend range back to normalized range
-                        const normalizedValue = (bend.value / 8192) - 1;
-                        transformedValue = (normalizedValue * factor + 1) * 8192;
-                    }
-                    
-                    track.addPitchBend({
-                        value: transformedValue,
-                        time: bend.time / speedFactor  // Scale time by speed
-                    });
-                });
-            }
-            
-            // Set instrument using current user settings
-            let programNumber = originalTrack.instrument?.number;
-            const userSettings = this.app.state.userSettings;
-            
-            // Use current program change setting if available
-            const upId = "instrumentSelect_" + channel;
-            if (userSettings && userSettings.channels && userSettings.channels[channel] && userSettings.channels[channel][upId] !== undefined) {
-                programNumber = parseInt(userSettings.channels[channel][upId]);
-                console.log('Using instrument select value:', programNumber);
-            } else {
-                console.log("no instrument select setting found:", upId, userSettings);
-            }
-            
-            if (programNumber !== undefined) {
-                track.instrument = {
-                    number: programNumber
-                };
-            }
-            
-            console.log(`Added track ${trackIndex} (channel ${channel}) with ${originalTrack.notes.length} notes`);
-        });
-        
-        // Update header tempos and time signatures with speed adjustment
-        if (speedFactor !== 1.0) {
-            // Scale tempo events
-            if (midi.header.tempos && midi.header.tempos.length > 0) {
-                midi.header.tempos.forEach(tempo => {
-                    tempo.time = tempo.time / speedFactor;  // Scale tempo change time
-                    // Note: tempo.bpm stays the same since we're scaling time instead
-                });
-            }
-            
-            // Scale time signature events
-            if (midi.header.timeSignatures && midi.header.timeSignatures.length > 0) {
-                midi.header.timeSignatures.forEach(timeSig => {
-                    timeSig.time = timeSig.time / speedFactor;  // Scale time signature change time
-                });
-            }
-            
-            console.log(`Scaled all event times by speed factor: ${speedFactor}`);
-        }
-        
         console.log('Exporting MIDI file...');
         const arrayBuffer = midi.toArray();
         const blob = new Blob([arrayBuffer], { type: 'audio/midi' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'negative_harmony.mid';
+        a.download = name;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         
         console.log('MIDI file exported successfully');
-        
-    } catch (error) {
-        console.error('Error creating MIDI file:', error);
-        console.error('Error stack:', error.stack);
-        alert('Failed to create MIDI file. Please check the console for details.');
     }
-}
+
+    createCurrentMidi() {
+        try {
+            if (!this.originalMidi) {
+                alert('No original MIDI data available for export');
+                return;
+            }
+
+            console.log('Creating new MIDI file from original with updated data:', this.app.state.userSettings);
+
+            // Create a new empty MIDI file
+            const midi = new Midi();
+            
+            console.log('Adding tracks with current transformations...');
+            
+            const state = this.app.state;
+            const speedFactor = state.speed;
+            
+            // Process each track from the original MIDI
+            this.originalMidi.tracks.forEach((originalTrack, trackIndex) => {
+                const channel = originalTrack.channel;
+                
+                // Create a new track
+                const track = midi.addTrack();
+                track.name = originalTrack.name || `Track ${trackIndex}`;
+                track.channel = channel;
+                
+                // Add notes with current transformations and speed adjustment
+                originalTrack.notes.forEach(note => {
+                    let transformedMidi = note.midi;
+                    if (channel !== 9) { // Skip drums channel
+                        transformedMidi = this.app.transformNote(note.midi, channel);
+                    }
+                    
+                    track.addNote({
+                        midi: transformedMidi,
+                        time: note.time / speedFactor,  // Scale time by speed
+                        duration: note.duration / speedFactor,  // Scale duration by speed
+                        velocity: note.velocity
+                    });
+                });
+                
+                // Add control changes using current user settings and speed adjustment
+                if (originalTrack.controlChanges) {
+                    const trackSettings = this.app.state.userSettings["channels"][channel];
+                    let volSet = false;
+                    let revSet = false;
+                    let panSet = false;
+                    const volSliderId = "volumeSlider_" + channel;
+                    const panSliderId = "panSlider_" + channel;
+                    const reverbSliderId = "reverbSlider_" + channel;
+
+                    Object.entries(originalTrack.controlChanges).forEach(([ccNumber, ccEvents]) => {
+                        ccEvents.forEach(cc => {
+                            let currentValue = cc.value * 127;
+
+                            // Use current track setting value if available
+                            if (trackSettings !== undefined) {
+                                if (ccNumber == 7 && trackSettings[volSliderId] !== undefined) {
+                                    currentValue = parseInt(trackSettings[volSliderId]);
+                                    console.log('Using volume slider value:', currentValue);
+                                    volSet = true;
+                                }
+                                else if (ccNumber == 10 && trackSettings[panSliderId] !== undefined) {
+                                    currentValue = parseInt(trackSettings[panSliderId]) * 127;
+                                    console.log('Using pan slider value:', currentValue);
+                                    panSet = true;
+                                }
+                                else if (ccNumber == 91 && trackSettings[reverbSliderId] !== undefined) {
+                                    currentValue = parseInt(trackSettings[reverbSliderId]) * 127;
+                                    console.log('Using reverb slider value:', currentValue);
+                                    revSet = true;
+                                }
+                            }
+                            console.log("Handling CC:", ccNumber, "Value:", currentValue, trackSettings);
+                            
+                            track.addCC({
+                                number: parseInt(ccNumber),
+                                value: currentValue,
+                                time: cc.time / speedFactor  // Scale time by speed
+                            });
+                        });
+                    });
+
+                    if (!volSet && trackSettings !== undefined && trackSettings[volSliderId] !== undefined) {
+                        track.addCC({
+                            number: 7,
+                            value: parseInt(trackSettings[volSliderId]),
+                            time: 0
+                        });
+                        console.log("added missing volume CC:", parseInt(trackSettings[volSliderId]) * 127);
+                    }
+                    if (!panSet && trackSettings !== undefined && trackSettings[panSliderId] !== undefined) {
+                        track.addCC({
+                            number: 10,
+                            value: parseInt(trackSettings[panSliderId]) * 127,
+                            time: 0
+                        });
+                        console.log("added missing pan CC:", parseInt(trackSettings[panSliderId]) * 127);
+                    }
+                    if (!revSet && trackSettings !== undefined && trackSettings[reverbSliderId] !== undefined) {
+                        track.addCC({
+                            number: 91,
+                            value: parseInt(trackSettings[reverbSliderId]) * 127,
+                            time: 0
+                        });
+                        console.log("added missing reverb CC:", parseInt(trackSettings[reverbSliderId]) * 127);
+                    }
+                }
+                
+                // Add pitch bends with transformations and speed adjustment
+                if (originalTrack.pitchBends && originalTrack.pitchBends.length > 0) {
+                    originalTrack.pitchBends.forEach(bend => {
+                        let transformedValue = bend.value;
+                        
+                        // Apply pitch bend transformation based on current mode
+                        if (state.mode !== 0) { // If not in normal mode
+                            const normal = this.app.normal;
+                            const factor = (!normal) ? -1 : 1;
+                            // Convert from MIDI pitch bend range back to normalized range
+                            const normalizedValue = (bend.value / 8192) - 1;
+                            transformedValue = (normalizedValue * factor + 1) * 8192;
+                        }
+                        
+                        track.addPitchBend({
+                            value: transformedValue,
+                            time: bend.time / speedFactor  // Scale time by speed
+                        });
+                    });
+                }
+                
+                // Set instrument using current user settings
+                let programNumber = originalTrack.instrument?.number;
+                const userSettings = this.app.state.userSettings;
+                
+                // Use current program change setting if available
+                const upId = "instrumentSelect_" + channel;
+                if (userSettings && userSettings.channels && userSettings.channels[channel] && userSettings.channels[channel][upId] !== undefined) {
+                    programNumber = parseInt(userSettings.channels[channel][upId]);
+                    console.log('Using instrument select value:', programNumber);
+                } else {
+                    console.log("no instrument select setting found:", upId, userSettings);
+                }
+                
+                if (programNumber !== undefined) {
+                    track.instrument = {
+                        number: programNumber
+                    };
+                }
+                
+                console.log(`Added track ${trackIndex} (channel ${channel}) with ${originalTrack.notes.length} notes`);
+            });
+            
+            // Update header tempos and time signatures with speed adjustment
+            if (speedFactor !== 1.0) {
+                // Scale tempo events
+                if (midi.header.tempos && midi.header.tempos.length > 0) {
+                    midi.header.tempos.forEach(tempo => {
+                        tempo.time = tempo.time / speedFactor;  // Scale tempo change time
+                        // Note: tempo.bpm stays the same since we're scaling time instead
+                    });
+                }
+                
+                // Scale time signature events
+                if (midi.header.timeSignatures && midi.header.timeSignatures.length > 0) {
+                    midi.header.timeSignatures.forEach(timeSig => {
+                        timeSig.time = timeSig.time / speedFactor;  // Scale time signature change time
+                    });
+                }
+                
+                console.log(`Scaled all event times by speed factor: ${speedFactor}`);
+            }
+
+            return midi;
+
+        } catch (error) {
+            console.error('Error creating MIDI file:', error);
+            console.error('Error stack:', error.stack);
+            alert('Failed to create MIDI file. Please check the console for details.');
+            return null;
+        }
+    }
 }
 
 // Export for module usage
