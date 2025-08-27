@@ -104,6 +104,12 @@ class Transport {
         Tone.Transport.position = 0;
         Tone.Transport.start();
         
+        // Notify score manager that playback started
+        const scoreManager = this.app.modules.scoreManager;
+        if (scoreManager && scoreManager.scoreFollowerActive) {
+            scoreManager.startPollingForPlayback('score');
+        }
+        
         if (this.progressSlider) {
             this.progressSlider.style.display = "block";
             const state = this.app.state;
@@ -112,16 +118,20 @@ class Transport {
                 const position = Tone.Transport.seconds;
                 const progress = ((state.reversedPlayback ? (this.app.track_duration / state.speed) - position : position) / (this.app.track_duration / state.speed)) * 100;
                 this.progressSlider.value = progress;
-                // console.log("POSITION (seconds):", Tone.Transport.seconds, " / ", track_duration / speed, Tone.Transport.position, "PROGRESS:", progress);
 
                 if ((!state.reversedPlayback && progress >= 100) || (state.reversedPlayback && progress <= 0)) {
-                    // console.log("Stopping playback...");
                     playBtn.innerText = "Play MIDI";
                     setTimeout(() => {
                         this.playing = false;
                         Tone.Transport.stop(time);
                         Tone.Transport.position = 0;
                         this.progressSlider.value = 0;
+                        
+                        // Notify score manager that playback stopped
+                        const scoreManager = this.app.modules.scoreManager;
+                        if (scoreManager) {
+                            scoreManager.stopPollingForPlayback();
+                        }
                     }, 200);
                     this.progressSlider.style.display = "none";
                     this.app.modules.midiManager.sendEvent_allNotesOff();
@@ -134,6 +144,13 @@ class Transport {
         Tone.Transport.stop();
         Tone.Transport.position = 0;
         playBtn.innerText = "Play MIDI";
+        
+        // Notify score manager that playback stopped
+        const scoreManager = this.app.modules.scoreManager;
+        if (scoreManager) {
+            scoreManager.stopPollingForPlayback();
+            scoreManager.resetScoreFollower();
+        }
         
         if (this.progressSlider) {
             this.progressSlider.value = 0;
@@ -756,7 +773,7 @@ class Transport {
     createCurrentMidi() {
         try {
             if (!this.originalMidi) {
-                alert('No original MIDI data available for export');
+                alert('No MIDI data available for export');
                 return;
             }
 
@@ -769,6 +786,31 @@ class Transport {
             
             const state = this.app.state;
             const speedFactor = state.speed;
+            const isReversed = state.reversedPlayback;
+
+            midi.header = JSON.parse(JSON.stringify(this.originalMidi.header));
+
+            // Get total ticks from the original MIDI header
+            const totalTicks = this.originalMidi.durationTicks;
+
+            // Update header tempos and time signatures with speed adjustment
+            if (speedFactor !== 1.0) {
+                // Scale tempo events
+                if (midi.header.tempos && midi.header.tempos.length > 0) {
+                    midi.header.tempos.forEach(tempo => {
+                        tempo.bpm = (this.app.bpm * state.speed).toFixed(2);
+                        tempo.ticks = tempo.ticks;
+                    });
+                }
+                
+                // Scale time signature events
+                if (midi.header.timeSignatures && midi.header.timeSignatures.length > 0) {
+                    midi.header.timeSignatures.forEach(timeSig => {
+                        timeSig.ticks = timeSig.ticks;
+                    });
+                }
+                console.log("Updated header tempos and time signatures:", midi.header, (this.app.bpm * state.speed).toFixed(2));
+            }
             
             // Process each track from the original MIDI
             this.originalMidi.tracks.forEach((originalTrack, trackIndex) => {
@@ -779,22 +821,34 @@ class Transport {
                 track.name = originalTrack.name || `Track ${trackIndex}`;
                 track.channel = channel;
                 
-                // Add notes with current transformations and speed adjustment
+                // Add notes with current transformations and reversed timing if needed
                 originalTrack.notes.forEach(note => {
                     let transformedMidi = note.midi;
                     if (channel !== 9) { // Skip drums channel
                         transformedMidi = this.app.transformNote(note.midi, channel);
                     }
                     
+                    let finalTicks = note.ticks;
+                    let finalDurationTicks = note.durationTicks;
+                    
+                    if (isReversed && note.ticks !== 0) {
+                        // Calculate reversed position similar to the scheduling logic
+                        const noteLength = (note.duration <= Tone.Time("8n").toSeconds()) ? 
+                            note.ticks : (note.ticks + ((channel !== 9) ? note.durationTicks : 0));
+                        finalTicks = totalTicks - noteLength;
+                        // Ensure we don't go below 0
+                        finalTicks = Math.max(0, finalTicks);
+                    }
+                    
                     track.addNote({
                         midi: transformedMidi,
-                        time: note.time / speedFactor,  // Scale time by speed
-                        duration: note.duration / speedFactor,  // Scale duration by speed
+                        ticks: finalTicks,
+                        durationTicks: finalDurationTicks,
                         velocity: note.velocity
                     });
                 });
                 
-                // Add control changes using current user settings and speed adjustment
+                // Add control changes using current user settings and reversed timing if needed
                 if (originalTrack.controlChanges) {
                     const trackSettings = this.app.state.userSettings["channels"][channel];
                     let volSet = false;
@@ -826,12 +880,19 @@ class Transport {
                                     revSet = true;
                                 }
                             }
-                            console.log("Handling CC:", ccNumber, "Value:", currentValue, trackSettings);
+                            
+                            let finalTicks = cc.ticks;
+                            if (isReversed && cc.ticks !== 0) {
+                                finalTicks = totalTicks - cc.ticks;
+                                finalTicks = Math.max(0, finalTicks);
+                            }
+                            
+                            console.log("Handling CC:", ccNumber, "Value:", currentValue, "Ticks:", finalTicks, trackSettings);
                             
                             track.addCC({
                                 number: parseInt(ccNumber),
                                 value: currentValue,
-                                time: cc.time / speedFactor  // Scale time by speed
+                                ticks: finalTicks
                             });
                         });
                     });
@@ -840,7 +901,7 @@ class Transport {
                         track.addCC({
                             number: 7,
                             value: parseInt(trackSettings[volSliderId]),
-                            time: 0
+                            ticks: 0
                         });
                         console.log("added missing volume CC:", parseInt(trackSettings[volSliderId]) * 127);
                     }
@@ -848,7 +909,7 @@ class Transport {
                         track.addCC({
                             number: 10,
                             value: parseInt(trackSettings[panSliderId]) * 127,
-                            time: 0
+                            ticks: 0
                         });
                         console.log("added missing pan CC:", parseInt(trackSettings[panSliderId]) * 127);
                     }
@@ -856,13 +917,13 @@ class Transport {
                         track.addCC({
                             number: 91,
                             value: parseInt(trackSettings[reverbSliderId]) * 127,
-                            time: 0
+                            ticks: 0
                         });
                         console.log("added missing reverb CC:", parseInt(trackSettings[reverbSliderId]) * 127);
                     }
                 }
                 
-                // Add pitch bends with transformations and speed adjustment
+                // Add pitch bends with transformations and reversed timing if needed
                 if (originalTrack.pitchBends && originalTrack.pitchBends.length > 0) {
                     originalTrack.pitchBends.forEach(bend => {
                         let transformedValue = bend.value;
@@ -876,9 +937,15 @@ class Transport {
                             transformedValue = (normalizedValue * factor + 1) * 8192;
                         }
                         
+                        let finalTicks = bend.ticks;
+                        if (isReversed && bend.ticks !== 0) {
+                            finalTicks = totalTicks - bend.ticks;
+                            finalTicks = Math.max(0, finalTicks);
+                        }
+                        
                         track.addPitchBend({
                             value: transformedValue,
-                            time: bend.time / speedFactor  // Scale time by speed
+                            ticks: finalTicks
                         });
                     });
                 }
@@ -904,26 +971,6 @@ class Transport {
                 
                 console.log(`Added track ${trackIndex} (channel ${channel}) with ${originalTrack.notes.length} notes`);
             });
-            
-            // Update header tempos and time signatures with speed adjustment
-            if (speedFactor !== 1.0) {
-                // Scale tempo events
-                if (midi.header.tempos && midi.header.tempos.length > 0) {
-                    midi.header.tempos.forEach(tempo => {
-                        tempo.time = tempo.time / speedFactor;  // Scale tempo change time
-                        // Note: tempo.bpm stays the same since we're scaling time instead
-                    });
-                }
-                
-                // Scale time signature events
-                if (midi.header.timeSignatures && midi.header.timeSignatures.length > 0) {
-                    midi.header.timeSignatures.forEach(timeSig => {
-                        timeSig.time = timeSig.time / speedFactor;  // Scale time signature change time
-                    });
-                }
-                
-                console.log(`Scaled all event times by speed factor: ${speedFactor}`);
-            }
 
             return midi;
 

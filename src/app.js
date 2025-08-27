@@ -39,19 +39,84 @@ class NegativeHarmonyApp {
         if (this.initialized) return;
 
         try {
-            // Initialize other modules
-            await this.initializeModules();
+            // Load external libraries first
+            await this.loadLibraries();
+            console.log('All libraries loaded successfully');
+            
+            // Load modules after libraries
+            await this.loadModules();
+            console.log('All modules loaded successfully');
+            
+            // Initialize modules after everything is loaded
+            this.initializeModules();
             
             this.initialized = true;
             console.log('Negative Harmony App initialized successfully');
+            
+            app.start().then(async () => {
+                var startPrompt = document.getElementById("start_prompt");
+                startPrompt.hidden = true;
+                document.getElementById("col_transport").style = "";
+            });
+            
         } catch (error) {
             console.error('Failed to initialize app:', error);
             throw error;
         }
-        app.start().then(async () => {
-            var startPrompt = document.getElementById("start_prompt");
-            startPrompt.hidden = true;
-            document.getElementById("col_transport").style = "";
+    }
+
+    loadLibraries() {
+        return new Promise((resolve, reject) => {
+            const libraries = [
+            'https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js',
+            'https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js',
+            'https://unpkg.com/@tonejs/midi@2.0.24'
+            ];
+
+            let loadedCount = 0;
+            const totalLibraries = libraries.length;
+
+            libraries.forEach(src => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = () => {
+                loadedCount++;
+                if (loadedCount === totalLibraries) {
+                resolve();
+                }
+            };
+            script.onerror = () => reject(new Error(`Failed to load library: ${src}`));
+            document.head.appendChild(script);
+            });
+        });
+    }
+
+    loadModules() {
+        return new Promise((resolve, reject) => {
+            const modules = [
+                './src/midi-manager.js',
+                './src/audio-engine.js',
+                './src/settings-manager.js',
+                './src/transport.js',
+                './src/score-manager.js'
+            ];
+
+            let loadedCount = 0;
+            const totalModules = modules.length;
+
+            modules.forEach(src => {
+                const script = document.createElement('script');
+                script.type = 'application/javascript';
+                script.src = src;
+                script.onload = () => {
+                    loadedCount++;
+                    if (loadedCount === totalModules) {
+                        resolve();
+                    }
+                };
+                script.onerror = () => reject(new Error(`Failed to load module: ${src}`));
+                document.head.appendChild(script);
+            });
         });
     }
 
@@ -64,12 +129,14 @@ class NegativeHarmonyApp {
         this.modules.audioEngine = new AudioEngine(this);
         this.modules.settingsManager = new SettingsManager(this);
         this.modules.transport = new Transport(this);
+        this.modules.scoreManager = new ScoreManager(this);
 
         // Initialize each module
         await this.modules.midiManager.init();
         await this.modules.audioEngine.init();
         await this.modules.settingsManager.init();
         await this.modules.transport.init();
+        await this.modules.scoreManager.init();
     }
 
     /**
@@ -187,7 +254,7 @@ class NegativeHarmonyApp {
         else if (perOctave == 2) {
             // get the note's channel's range from transport modules. parts[] for per-voice inversion using channel-specific range
             if (!this.modules.transport.parts[channel]) {
-                console.warn(`No note range data for channel ${channel}:`, this.modules.transport.parts);
+                // console.warn(`No note range data for channel ${channel}:`, this.modules.transport.parts);
                 // Fallback to perOctave=1 behavior, should be fixed in transport.js, line 572
                 this.modules.transport.forceUpdateChannel = true;
                 return this.negativeHarmonyTransform(note, 1, negRoot, channel);
