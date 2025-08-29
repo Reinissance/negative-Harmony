@@ -251,7 +251,7 @@ class NegativeHarmonyApp {
 
             return transformedNote;
         }
-        else if (perOctave == 2) {
+        else if (perOctave == 2 && channel != 9) {
             // get the note's channel's range from transport modules. parts[] for per-voice inversion using channel-specific range
             if (!this.modules.transport.parts[channel]) {
                 // console.warn(`No note range data for channel ${channel}:`, this.modules.transport.parts);
@@ -260,6 +260,9 @@ class NegativeHarmonyApp {
                 return this.negativeHarmonyTransform(note, 1, negRoot, channel);
             }
             const rangeData = this.modules.transport.parts[channel]['noteRange'];
+            if (!rangeData) {
+                console.log(`No rangeData for channel ${channel}, ${JSON.stringify(this.modules.transport.parts[channel])}`);
+            }
             const rangeMiddle = (rangeData.lowest + rangeData.highest) / 2;
             
             // Calculate the axis based on negRoot, but positioned at the range middle
