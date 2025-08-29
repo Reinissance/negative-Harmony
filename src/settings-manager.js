@@ -19,7 +19,7 @@ class SettingsManager {
         
         if (channel === -1) {
             // Global setting
-            state.userSettings[key] = value;
+            state[key] = value;
         } else {
             // Channel-specific setting
             if (!state.userSettings.channels[channel]) {
@@ -91,7 +91,6 @@ class SettingsManager {
             this.debouncedUpdateUserSettings("perOktave", state.perOktave, -1);
             const oktSelect = document.getElementById("parameter_perOktave");
             oktSelect.selectedIndex = state.perOktave;
-            console.log("perOktave set to:", state.perOktave, perOktaveParam);
             settingsFound = true;
         }
         
@@ -189,7 +188,7 @@ class SettingsManager {
     
         // Flatten the state structure for URL parameters
         const urlParams = { ...this.app.state };
-        
+
         // Move channels from userSettings.channels to top-level channels
         if (this.app.state.userSettings && this.app.state.userSettings.channels) {
             urlParams.channels = this.app.state.userSettings.channels;
@@ -197,7 +196,7 @@ class SettingsManager {
         
         // Remove userSettings from URL params since we've extracted what we need
         delete urlParams.userSettings;
-        
+
         const shareUrl = Utils.generateShareUrl(baseUrl, urlParams);
         
         Utils.updateShareUrl(shareUrl);

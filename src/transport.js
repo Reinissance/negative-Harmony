@@ -432,7 +432,7 @@ class Transport {
         // If already starts at the first beat of the first musical bar, nothing to do for start
         let startAligned = false;
         if (firstBarInfo.ticks === 0) {
-            console.log('MIDI already starts at first beat of first musical bar');
+            // console.log('MIDI already starts at first beat of first musical bar');
             startAligned = true;
         }
         
@@ -467,11 +467,11 @@ class Transport {
             if (hasMusicalEventsBeforeFirstBar || hasImportantHeaderEvents) {
                 // Add padding to preserve any pickup notes or important events
                 startPaddingTicks = firstBarTicks;
-                console.log(`Adding ${startPaddingTicks} ticks of padding to preserve content before first musical bar (bar ${firstBarInfo.barNumber})`);
+                // console.log(`Adding ${startPaddingTicks} ticks of padding to preserve content before first musical bar (bar ${firstBarInfo.barNumber})`);
             } else {
                 // No musical events before first bar - safe to shift backward
                 startOffsetTicks = firstBarTicks;
-                console.log(`Shifting MIDI backward: moving first musical bar from tick ${startOffsetTicks} to tick 0 (was bar ${firstBarInfo.barNumber})`);
+                // console.log(`Shifting MIDI backward: moving first musical bar from tick ${startOffsetTicks} to tick 0 (was bar ${firstBarInfo.barNumber})`);
             }
         }
         
@@ -490,9 +490,9 @@ class Transport {
         const needsEndPadding = endPaddingTicks !== ticksPerMeasure; // Don't add full measure if already aligned
         
         if (needsEndPadding) {
-            console.log(`Adding ${endPaddingTicks} ticks of padding to align end to downbeat`);
+            // console.log(`Adding ${endPaddingTicks} ticks of padding to align end to downbeat`);
         } else {
-            console.log('MIDI already ends on a downbeat');
+            // console.log('MIDI already ends on a downbeat');
         }
         
         // Apply start alignment transformations
@@ -596,8 +596,8 @@ class Transport {
         
         // Add end padding if needed by extending the last notes
         if (needsEndPadding) {
-            console.log(`Extending last notes by ${endPaddingTicks} ticks to align end to downbeat`);
-            
+            // console.log(`Extending last notes by ${endPaddingTicks} ticks to align end to downbeat`);
+
             // Find the actual last note(s) across all tracks
             let lastNoteTime = 0;
             let lastNotes = [];
@@ -632,7 +632,7 @@ class Transport {
                     }
                 });
                 
-                console.log(`Extended ${lastNotes.length} last note(s) by ${endPaddingTicks} ticks`);
+                // console.log(`Extended ${lastNotes.length} last note(s) by ${endPaddingTicks} ticks`);
             } else {
                 console.warn('No last notes found to extend - MIDI may not end properly aligned');
             }

@@ -41,7 +41,7 @@ function toggleTransport(element) {
 }
 
 function reloadWithUrl() {
-    console.log("Reload from main");
+    // console.log("Reload from main");
     const midiFileUrl = document.getElementById("midiUrl").value;
     if (midiFileUrl) {
         if (!midiFileUrl.endsWith(".mid") && !midiFileUrl.endsWith(".midi")) {
@@ -61,6 +61,7 @@ function reloadWithUrl() {
                 app.modules.transport.cleanup();
                 app.modules.midiManager.parseMidiFile(new Midi(data));
                 app.modules.settingsManager.share();
+                app.state.midiFile = midiFileUrl;
                 document.getElementById("midiUrl").value = midiFileUrl;
                 Utils.setPlayButtonActive(true);
                 const settingsManager = app.modules.settingsManager;
