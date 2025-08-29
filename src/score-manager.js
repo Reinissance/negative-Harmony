@@ -372,9 +372,10 @@ class ScoreManager {
             // Get current settings from settingsManager
             if (this.app.modules.settingsManager && this.app.modules.settingsManager.share) {
                 const shareUrl = this.app.modules.settingsManager.share();
-                
-                // Reload the page
-                window.location = shareUrl;
+                if (shareUrl) {
+                    // Reload the page
+                    window.location = shareUrl;
+                }
             } else {
                 console.warn('Settings manager not available, performing simple reload');
                 window.location.reload();
