@@ -1,5 +1,5 @@
 # Negative Harmony MIDI Player
-A web MIDI file player with the capability to playback in [negative harmony](https://www.opussciencecollective.com/post/the-harmonic-upside-down-negative-harmony) or backwards while providing also a score rendered by [abcjs](https://github.com/paulrosen/abcjs/) (using a WASM build of midi2abc from the [abcmidi package](https://github.com/sshlien/abcmidi)).
+A web MIDI file player with the capability to playback in [negative harmony](https://www.opussciencecollective.com/post/the-harmonic-upside-down-negative-harmony) or backwards while providing also a score rendered by [abcjs](https://github.com/paulrosen/abcjs/) (using a [WASM build](https://github.com/Reinissance/midi2abcWASM) of midi2abc from the [abcmidi package](https://github.com/sshlien/abcmidi)).
 
 This tool loads and plays back MIDI files using [Tone.js](https://tonejs.github.io/), alters the note pitches and renders the audio with [WebAudioFont](https://github.com/surikov/webaudiofont), while the user can select alternative sounds per channel or drumnote.
 
