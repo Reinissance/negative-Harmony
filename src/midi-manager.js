@@ -144,8 +144,6 @@ class MidiManager {
         
         // Update app state
         const state = this.app.state;
-        state.perOktave = 2;
-        console.error("perOktave pre PARSE:", state.perOktave);
         this.app.midiFileRead = true;
         this.app.track_duration = midiData.duration;
         state.speed = 1.0;

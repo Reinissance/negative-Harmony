@@ -14,6 +14,7 @@ class ScoreManager {
         this.abcOutput = ""; // Store output from WASM module
         this.currentKeySignature = 'C'; // Track current key signature
         this.updateTimeout = null;
+        this.totalBars = 0; // Total number of bars in the score
     }
 
     async init() {
@@ -168,6 +169,7 @@ class ScoreManager {
 
             // Store the result
             this.abcString = abcOutput;
+            this.totalBars = this.getTotalBarsFromABC();
             return abcOutput;
             
         } catch (error) {
@@ -176,6 +178,41 @@ class ScoreManager {
             this.showAbcErrorNotification(`ABC generation error: ${error.message}`);
             return '';
         }
+    }
+
+    getTotalBarsFromABC(abcString = null) {
+        const abc = abcString || this.abcString;
+        if (!abc || !abc.trim()) {
+            this.totalBars = 0;
+            return 0;
+        }
+
+        // Split into lines and group by voices
+        const lines = abc.split('\n');
+        let voices = {};
+        let currentVoice = 'default';
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('V:')) {
+                // New voice header
+                const match = trimmed.match(/^V:\s*([^\s]+)/);
+                currentVoice = match ? match[1] : 'default';
+                if (!voices[currentVoice]) voices[currentVoice] = [];
+            } else if (!/^(X:|T:|M:|L:|K:|Q:|%|%%)/.test(trimmed) && trimmed.length > 0) {
+                // Music line
+                if (!voices[currentVoice]) voices[currentVoice] = [];
+                voices[currentVoice].push(trimmed);
+            }
+        }
+
+        // Count bars for each voice, pick the max (handles multi-voice scores robustly)
+        let maxBars = 0;
+        for (const voiceLines of Object.values(voices)) {
+            const joined = voiceLines.join(' ');
+            const bars = (joined.match(/\|/g) || []).length;
+            if (bars > maxBars) maxBars = bars;
+        }
+        return maxBars;
     }
 
     showAbcErrorNotification(errorMessage) {
@@ -335,7 +372,6 @@ class ScoreManager {
             // Get current settings from settingsManager
             if (this.app.modules.settingsManager && this.app.modules.settingsManager.share) {
                 const shareUrl = this.app.modules.settingsManager.share();
-                console.log('Reloading with settings:', shareUrl);
                 
                 // Reload the page
                 window.location = shareUrl;
@@ -357,6 +393,7 @@ class ScoreManager {
         if (showScoreBtn) {
             showScoreBtn.style.display = 'none';
         }
+        this.scoreShown = false;
         this.scoreAvailable = false;
         const modal = document.getElementById('abcErrorModal');
         if (modal) {
@@ -1281,7 +1318,7 @@ transposeDrumNotes(line, keySignature = 'C') {
         this.firstDownbeat = downbeat;
         
         // If you need to show the detected downbeat in UI:
-        console.log(`First downbeat detected at: ${downbeat.time.toFixed(2)}s (${downbeat.method})`);
+        // console.log(`First downbeat detected at: ${downbeat.time.toFixed(2)}s (${downbeat.method})`);
     }
 
     // Method to get current playback bar position
@@ -1331,6 +1368,7 @@ transposeDrumNotes(line, keySignature = 'C') {
 
     // Centralized update logic
     updateScoreFollower(containerId, barNumber, immediately = false) {
+
         // Update current bar display
         const display = document.getElementById('currentBarDisplay');
         if (display) {
@@ -1338,12 +1376,18 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
         
         // Calculate which 4-bar window this bar belongs to
-        const targetWindow = Math.floor(barNumber / 4) * 4;
-        
+        let targetWindow = Math.floor(barNumber / 4) * 4;
+
         // Update if we've moved to a different 4-bar window or immediately requested
         if (targetWindow !== this.currentBarStart || immediately) {
+            if (this.app.state.reversedPlayback) {
+                targetWindow = Math.abs(this.totalBars - targetWindow);
+                if (targetWindow === this.currentBarStart) {
+                    return; // No change
+                }
+            }
             this.currentBarStart = targetWindow;
-            console.log(`Score follower updating to bars ${this.currentBarStart}-${this.currentBarStart + 3} (current bar: ${barNumber})`);
+            // console.log(`Score follower updating to bars ${this.currentBarStart}-${this.currentBarStart + 3} (current bar: ${barNumber})`);
             
             // Clear any pending updates
             if (this.updateTimeout) {
@@ -1358,7 +1402,7 @@ transposeDrumNotes(line, keySignature = 'C') {
 
     // Enhanced score following with playback integration
     startScoreFollowing(containerId = 'score', startBar = 0) {
-        console.log(`Starting score following at bar ${startBar}...`);
+        // console.log(`Starting score following at bar ${startBar}...`);
         this.scoreFollowerActive = true;
         
         // Get the actual current playback position instead of using startBar parameter
@@ -1366,12 +1410,12 @@ transposeDrumNotes(line, keySignature = 'C') {
         this.currentBarStart = Math.floor(currentBar / 4) * 4; // Align to 4-bar boundaries
         this.lastPolledBar = null; // Reset polling state
         
-        console.log(`Score follower starting at bar ${currentBar}, window: ${this.currentBarStart}-${this.currentBarStart + 3}`);
+        // console.log(`Score follower starting at bar ${currentBar}, window: ${this.currentBarStart}-${this.currentBarStart + 3}`);
         
         // Initial render with immediate update
         this.renderScoreFollower(containerId, this.currentBarStart);
         
-        console.log('Score follower ready - starting polling immediately');
+        // console.log('Score follower ready - starting polling immediately');
         
         // Start polling immediately rather than waiting
         this.startPollingForPlayback(containerId);

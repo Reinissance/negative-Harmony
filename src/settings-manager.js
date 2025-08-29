@@ -91,6 +91,7 @@ class SettingsManager {
             this.debouncedUpdateUserSettings("perOktave", state.perOktave, -1);
             const oktSelect = document.getElementById("parameter_perOktave");
             oktSelect.selectedIndex = state.perOktave;
+            console.log("perOktave set to:", state.perOktave, perOktaveParam);
             settingsFound = true;
         }
         
@@ -244,6 +245,8 @@ class SettingsManager {
             const data = await response.arrayBuffer();
             
             this.app.localFile = false;
+            // Handle channel settings
+            await this.applyChannelSettings(urlParams);
             const midiManager = this.app.modules.midiManager;
             if (midiManager) {
                 midiManager.parseMidiFile(new Midi(data));
@@ -251,8 +254,6 @@ class SettingsManager {
                 console.error("Cannot load MIDI file: modular MIDI manager not available.");
             }
 
-            // Handle channel settings
-            await this.applyChannelSettings(urlParams);
 
             // Update UI
             document.getElementById("midiUrl").value = midiFileUrl;

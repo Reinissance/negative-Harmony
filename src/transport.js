@@ -54,6 +54,12 @@ class Transport {
                 const midiManager = this.app.modules.midiManager;
                 if (midiManager) {
                     midiManager.sendEvent_allNotesOff();
+                    const scoreManager = this.app.modules.scoreManager;
+                    if (scoreManager) {
+                        const updatedMidiData = this.createCurrentMidi();
+                        scoreManager.generateABCStringfromMIDI(updatedMidiData);
+                        scoreManager.updateScoreFollower('score', scoreManager.currentBarStart, true);
+                    }
                 }
             }, 300);
         });
@@ -225,7 +231,6 @@ class Transport {
             }, 200);
         }
 
-        // Rest of the existing setSpeed logic...
         if (wasPlaying) {
             this.parts.forEach(part => {
                 part.stop();

@@ -1,7 +1,9 @@
 # Negative Harmony MIDI Player
-A web MIDI file player with the capability to playback in [negative harmony](https://www.opussciencecollective.com/post/the-harmonic-upside-down-negative-harmony) or backwards.
+A web MIDI file player with the capability to playback in [negative harmony](https://www.opussciencecollective.com/post/the-harmonic-upside-down-negative-harmony) or backwards while providing also a score rendered by [abcjs](https://github.com/paulrosen/abcjs/) (using a WASM build of midi2abc from the [abcmidi package](https://github.com/sshlien/abcmidi)).
 
-This tool loads and plays MIDI files using [Tone.js](https://tonejs.github.io/), alters the note pitches via [heavy](https://github.com/Wasted-Audio/hvcc) (its JS generator), and renders the audio with [WebAudioFont](https://github.com/surikov/webaudiofont), while the user can select alternative sounds per channel or drumnote.
+This tool loads and plays back MIDI files using [Tone.js](https://tonejs.github.io/), alters the note pitches and renders the audio with [WebAudioFont](https://github.com/surikov/webaudiofont), while the user can select alternative sounds per channel or drumnote.
+
+[Explore the site here](https://reinissance.github.io/negative-Harmony/).
 
 ## Usage
 
@@ -9,9 +11,11 @@ This tool loads and plays MIDI files using [Tone.js](https://tonejs.github.io/),
 
 Select an example or upload a MIDI file and hit play.
 
-### External MIDI File
+### Search MIDIs from [bitmidi](https://bitmidi.com/) or manually search an external MIDI File
 
-You can also load a MIDI file from an external link, provided the CORS headers of the source allow it (most files on [bitmidi](https://bitmidi.com/), [mfiles](https://www.mfiles.co.uk/midi-files.htm) or [midikaos](https://midikaos.mnstrl.org/) do) - just copy the download url of a file and paste into into the input field.
+You can search for MIDI files from bitmidis huge database of MIDI files directly in the input field.
+
+Alternatively load a MIDI file from an external link, provided the CORS headers of the source allow it (most files on bitmidi, [mfiles](https://www.mfiles.co.uk/midi-files.htm) or [midikaos](https://midikaos.mnstrl.org/) do) - just copy the download url of a file and paste into into the input field.
 
 ### External MIDI Devices
 
@@ -26,13 +30,14 @@ The playback can be switched to reversed, which simply results in playing backwa
 
 - **Normal**: Simple MIDI playback.
 - **Left-hand Piano**: Inverts notes around middle D (MIDI number 62), except for drum channel 10.
-- **Negative Harmony**: Inverts notes around the root's thirds, except for drum channel 10. The axis lies between major and minor 3rds, so the latter becomes the former, the root becomes the 5th, and vice versa. The root of the loaded MIDI file is detected automatically, but can be changed manually.
+- **Negative Harmony**: Inverts notes around the root's thirds, except for drum channel 10. The axis lies between major and minor 3rds, so the latter becomes the former, the root becomes the 5th, and vice versa. The root of the loaded MIDI file is tried to be detected automatically, but can be changed manually.
 
 For the last two modes pitch bend messages are turned upside down as well.
 
-## Per Octave
+## Per Octave / per Voice
 
-Negative harmony inverts the piece, making the bass the highest voice for example. Therefor you can invert notes per octave for left-hand and negative harmony modes, keeping everything close to its original place. This may cause melodies to switch octaves unexpectedly. Changing the root of the piece shifts this point in the negatively harmonized tuned voices (apart from also transposing it).
+Negative harmony inverts the piece, making the bass the highest voice for example. Therefor you can invert notes per octave for left-hand and negative harmony modes, keeping everything close to its original place. This may cause melodies to switch octaves unexpectedly when in per oKtave mode, allthough the leading tones are respected by setting the root. Changing the root of the piece shifts this point in the negatively harmonized tuned voices (apart from also transposing it).
+If per Voice is selected each channel is individually turned upside down around an axis lying in the middle of the voices range, respecting the selected root.
 
 ## Instrument Settings
 
@@ -43,6 +48,9 @@ You can adjust settings such as the global speed, or for each instrument (aka ea
 If you pasted an url a share button will be provided: The url shared will include the linked file. Thus you can for example share links to specific files like: [Ludwig's Knocking Fate](https://reinissance.github.io/negative-Harmony/index.html?midiFile=https://bitmidi.com/uploads/34948.mid).
 The url shared will also include any change you made to instruments settings (and therefor may become very long).
 Settings shared this way will override any midi control message in the file. This ways you can change for example also the [intrumentation of a piece](https://reinissance.github.io/negative-Harmony/index.html?midiFile=https%3A%2F%2Fbitmidi.com%2Fuploads%2F27670.mid&channels=%257B%25220%2522%253A%257B%2522instrumentSelect_0%2522%253A%252218%2522%252C%2522panSlider_0%2522%253A%2522-0.65%2522%257D%252C%25221%2522%253A%257B%2522instrumentSelect_1%2522%253A%252218%2522%252C%2522panSlider_1%2522%253A%2522-0.56%2522%257D%252C%25222%2522%253A%257B%2522instrumentSelect_2%2522%253A%252218%2522%252C%2522panSlider_2%2522%253A%2522-0.56%2522%252C%2522reverbSlider_2%2522%253A%25220.84%2522%257D%252C%25223%2522%253A%257B%2522panSlider_3%2522%253A%25220.53%2522%252C%2522instrumentSelect_3%2522%253A%252232%2522%257D%252C%25224%2522%253A%257B%2522sfIndex_4%2522%253A%25221%2522%252C%2522instrumentSelect_4%2522%253A%252264%2522%257D%257D&perOktave=1&mode=2&negRoot=59&reverbGain=1.01&irUrl=2&speed=0.91). When settings for a channel differ from those of the loaded midi file, a "reset to File Settings"- button will be provided.
+
+## Download
+You can also download the current state and settings as standard MIDI-file.
 
 ## Examples
 
@@ -71,14 +79,16 @@ Here are some examples of MIDI files processed with the Negative Harmony MIDI Pl
 
 ## Contribution
 
-...is very are welcome!
+...is very welcome!
 If you created a nice example feel free to open an issue to share the link, I'll add it to the examples, or create a fork, add the link(s) to [examples.json](https://github.com/Reinissance/negative-Harmony/blob/main/examples.json) and create a pull request.
 
 ## Credits
 
 - [WebAudioFont](https://github.com/surikov/webaudiofont)
 - [Tone.js](https://tonejs.github.io/)
-- [heavy](https://github.com/Wasted-Audio/hvcc)
+- [abcjs](https://github.com/paulrosen/abcjs/)
+- [abcmidi package](https://github.com/sshlien/abcmidi)
+- [emsdk](https://github.com/emscripten-core/emsdk.git)
 
 This project includes impulse response files provided by various users on freesound.org:
 - "cathedral_Saint_Pierre" by allistersandwich -- [Link](https://freesound.org/s/479080/) -- License: Attribution 4.0
