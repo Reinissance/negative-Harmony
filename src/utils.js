@@ -52,6 +52,24 @@ class Utils {
             playBtn.innerText = "Play MIDI";
             playBtn.style.color = "red";
         }
+        const downloadButton = document.getElementById('downloadMidi');
+        if (downloadButton) {
+            downloadButton.style.display = active ? "inline-block" : "none";
+        }
+        
+        const showScore = document.getElementById('showScore');
+        if (showScore) {
+            if (active) {
+                const scoreManager = window.app?.modules?.scoreManager;
+                if (scoreManager?.scoreAvailable) {
+                    showScore.style.display = "inline-block";
+                } else {
+                    showScore.style.display = "none";
+                }
+            } else {
+                showScore.style.display = "none";
+            }
+        }
     }
 
     static createElementWithAttributes(tagName, attributes = {}, textContent = '') {
@@ -445,31 +463,6 @@ if (typeof module !== 'undefined' && module.exports) {
         resultsContainer.appendChild(paginationDiv);
       }
 
-      const closeButton = document.createElement("button");
-      closeButton.textContent = "×";
-      closeButton.style.cssText = `
-        position: absolute;
-        top: 0;
-        right: 15px;
-        border: none;
-        background: none;
-        font-size: ${isMobile ? "28px" : "20px"};
-        cursor: pointer;
-        color: #ffffffff;
-        text-shadow: 1px 1px 2px rgba(0, 26, 255, 1);
-        padding: ${isMobile ? "10px 15px" : "4px 8px"};
-        -webkit-tap-highlight-color: rgba(0,0,0,0);
-        touch-action: manipulation;
-      `;
-      closeButton.addEventListener("click", () => {
-        lastSearchResults = null;
-        lastSearchQuery = null;
-        lastSearchPage = 0;
-        resultsContainer._cleanup();
-        resultsContainer.remove();
-      });
-
-      resultsContainer.appendChild(closeButton);
     } else {
       resultsContainer.innerHTML = `<p style='color: white; margin: 0; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); text-align: center; font-size: ${isMobile ? "16px" : "14px"}; padding: 20px;'>No results found.</p>`;
       setTimeout(() => {
@@ -477,6 +470,31 @@ if (typeof module !== 'undefined' && module.exports) {
         resultsContainer.remove();
       }, 3000);
     }
+
+    const closeButton = document.createElement("button");
+    closeButton.textContent = "×";
+    closeButton.style.cssText = `
+      position: absolute;
+      top: 0;
+      right: 15px;
+      border: none;
+      background: none;
+      font-size: ${isMobile ? "28px" : "20px"};
+      cursor: pointer;
+      color: #ffffffff;
+      text-shadow: 1px 1px 2px rgba(0, 26, 255, 1);
+      padding: ${isMobile ? "10px 15px" : "4px 8px"};
+      -webkit-tap-highlight-color: rgba(0,0,0,0);
+      touch-action: manipulation;
+    `;
+    closeButton.addEventListener("click", () => {
+      lastSearchResults = null;
+      lastSearchQuery = null;
+      lastSearchPage = 0;
+      resultsContainer._cleanup();
+      resultsContainer.remove();
+    });
+    resultsContainer.appendChild(closeButton);
 
     setTimeout(() => {
       const closeOnClickOutside = e => {

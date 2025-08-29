@@ -102,13 +102,17 @@ class Transport {
         playBtn.innerText = "Stop Playback";
         this.playing = true;
         Tone.Transport.position = 0;
-        Tone.Transport.start();
         
-        // Notify score manager that playback started
+        // Notify score manager BEFORE starting transport
         const scoreManager = this.app.modules.scoreManager;
-        if (scoreManager && scoreManager.scoreFollowerActive) {
-            scoreManager.startPollingForPlayback('score');
+        if (scoreManager && scoreManager.scoreShown) {
+            // Start polling for score following immediately
+            scoreManager.currentBarStart = 0;
+            scoreManager.startScoreFollowing('score', 0);
         }
+        
+        // Start transport after score manager is ready
+        Tone.Transport.start();
         
         if (this.progressSlider) {
             this.progressSlider.style.display = "block";
@@ -149,7 +153,12 @@ class Transport {
         const scoreManager = this.app.modules.scoreManager;
         if (scoreManager) {
             scoreManager.stopPollingForPlayback();
-            scoreManager.resetScoreFollower();
+            
+            // If score is currently shown, reset to first 4 bars
+            if (scoreManager.scoreShown && scoreManager.scoreFollowerActive) {
+                // console.log('Playback stopped - resetting score follower to beginning');
+                scoreManager.resetScoreFollower('score');
+            }
         }
         
         if (this.progressSlider) {
@@ -180,9 +189,8 @@ class Transport {
         // Stop transport and clear all scheduled events if playing
         if (wasPlaying) {
             Tone.Transport.stop();
-            Tone.Transport.cancel(); // Clear ALL scheduled events
+            Tone.Transport.cancel();
             
-            // Send immediate all notes off
             const midiManager = this.app.modules.midiManager;
             midiManager.sendEvent_allNotesOff();
             midiManager.sendEvent_sustainPedalOff();
@@ -191,7 +199,7 @@ class Transport {
         state.speed = parseFloat(value);
         Tone.Transport.bpm.value = (this.app.bpm * state.speed).toFixed(2);
 
-        // Update UI
+        // Update UI elements...
         const label = document.querySelector('label[for="speedControl"]');
         if (label) {
             label.textContent = "Playback Speed: " + (this.app.bpm * state.speed).toFixed(2) + " BPM";
@@ -207,23 +215,29 @@ class Transport {
             resetBtn.style.display = (state.speed === 1.0) ? "none" : "block";
         }
 
-        // If was playing, restart from adjusted position
+        // Notify score manager of speed change
+        const scoreManager = this.app.modules.scoreManager;
+        if (scoreManager && scoreManager.scoreShown) {
+            // Reset score follower position to account for timing changes
+            setTimeout(() => {
+                const currentBar = scoreManager.getCurrentPlaybackBar();
+                scoreManager.updateScoreFollower('score', currentBar, true);
+            }, 200);
+        }
+
+        // Rest of the existing setSpeed logic...
         if (wasPlaying) {
-            // Restart parts with new timing
             this.parts.forEach(part => {
                 part.stop();
                 part.start(0.1);
             });
             
-            // Set position and restart transport
             setTimeout(() => {
-                // Adjust position for new speed
                 const adjustedPosition = currentPosition;
                 Tone.Transport.seconds = adjustedPosition;
                 Tone.Transport.start();
             }, 100);
         } else {
-            // Just send notes off if not playing
             setTimeout(() => {
                 const midiManager = this.app.modules.midiManager;
                 midiManager.sendEvent_allNotesOff();
@@ -278,6 +292,10 @@ class Transport {
             const shares = document.getElementById("st-1")
             if (shares) {
                 shares.style.display = "none";
+            }
+            const scoreManager = this.app.modules.scoreManager;
+            if (scoreManager) {
+                scoreManager.abcString = "";
             }
         }
         
@@ -351,9 +369,329 @@ class Transport {
         }
     }
 
+    detectFirstBarWithMusic(midi) {
+        const ppq = midi.header.ppq || 96;
+        const timeSignature = midi.header.timeSignatures?.[0]?.timeSignature || [4, 4];
+        const [numerator, denominator] = timeSignature;
+        
+        // Calculate ticks per beat and measure
+        const ticksPerBeat = ppq * (4 / denominator);
+        const ticksPerMeasure = ticksPerBeat * numerator;
+        
+        // Collect all musical events (notes, not just control changes)
+        const musicalEvents = [];
+        midi.tracks.forEach(track => {
+            // Only count actual notes as musical events
+            if (track.notes && track.notes.length > 0) {
+                track.notes.forEach(note => {
+                    musicalEvents.push(note.ticks);
+                });
+            }
+        });
+        
+        if (musicalEvents.length === 0) {
+            return { ticks: 0, time: 0, method: 'noMusic' };
+        }
+        
+        // Sort events by time
+        musicalEvents.sort((a, b) => a - b);
+        
+        // Find the first musical event
+        const firstEventTicks = musicalEvents[0];
+        
+        // Calculate which bar this event falls into
+        const barNumber = Math.floor(firstEventTicks / ticksPerMeasure);
+        
+        // The first beat of that bar
+        const firstBeatOfFirstMusicalBar = barNumber * ticksPerMeasure;
+        
+        return {
+            ticks: firstBeatOfFirstMusicalBar,
+            time: this.ticksToSeconds ? this.ticksToSeconds(firstBeatOfFirstMusicalBar, midi.header.tempos || [{ bpm: 120, ticks: 0 }], ppq) : 0,
+            method: 'firstMusicalBar',
+            barNumber: barNumber + 1, // Human-readable bar number (1-based)
+            firstEventTicks: firstEventTicks
+        };
+    }
+
+    alignMidiToFirstMusicalBar(midi) {
+        const firstBarInfo = this.detectFirstBarWithMusic(midi);
+        
+        // Calculate measure length for end alignment
+        const ppq = midi.header.ppq || 96;
+        const timeSignature = midi.header.timeSignatures?.[0]?.timeSignature || [4, 4];
+        const [numerator, denominator] = timeSignature;
+        const ticksPerBeat = ppq * (4 / denominator);
+        const ticksPerMeasure = ticksPerBeat * numerator;
+        
+        // If already starts at the first beat of the first musical bar, nothing to do for start
+        let startAligned = false;
+        if (firstBarInfo.ticks === 0) {
+            console.log('MIDI already starts at first beat of first musical bar');
+            startAligned = true;
+        }
+        
+        const firstBarTicks = firstBarInfo.ticks;
+        
+        // Check if there are any musical events before the first bar (only if not already aligned)
+        let hasMusicalEventsBeforeFirstBar = false;
+        let hasImportantHeaderEvents = false;
+        
+        if (!startAligned) {
+            midi.tracks.forEach(track => {
+                // Only check for actual musical content (notes)
+                if (track.notes && track.notes.some(note => note.ticks < firstBarTicks)) {
+                    hasMusicalEventsBeforeFirstBar = true;
+                }
+            });
+            
+            // Check for important header events before first bar
+            if (midi.header.tempos && midi.header.tempos.some(tempo => tempo.ticks > 0 && tempo.ticks < firstBarTicks)) {
+                hasImportantHeaderEvents = true;
+            }
+            if (midi.header.timeSignatures && midi.header.timeSignatures.some(ts => ts.ticks > 0 && ts.ticks < firstBarTicks)) {
+                hasImportantHeaderEvents = true;
+            }
+        }
+        
+        // Handle start alignment
+        let startPaddingTicks = 0;
+        let startOffsetTicks = 0;
+        
+        if (!startAligned) {
+            if (hasMusicalEventsBeforeFirstBar || hasImportantHeaderEvents) {
+                // Add padding to preserve any pickup notes or important events
+                startPaddingTicks = firstBarTicks;
+                console.log(`Adding ${startPaddingTicks} ticks of padding to preserve content before first musical bar (bar ${firstBarInfo.barNumber})`);
+            } else {
+                // No musical events before first bar - safe to shift backward
+                startOffsetTicks = firstBarTicks;
+                console.log(`Shifting MIDI backward: moving first musical bar from tick ${startOffsetTicks} to tick 0 (was bar ${firstBarInfo.barNumber})`);
+            }
+        }
+        
+        // Calculate current end position and determine end padding needed
+        let currentEndTicks = midi.durationTicks;
+        
+        // Adjust end position based on start changes
+        if (startPaddingTicks > 0) {
+            currentEndTicks += startPaddingTicks;
+        } else if (startOffsetTicks > 0) {
+            currentEndTicks -= startOffsetTicks;
+        }
+        
+        // Calculate how much padding is needed to align end to next downbeat
+        const endPaddingTicks = ticksPerMeasure - (currentEndTicks % ticksPerMeasure);
+        const needsEndPadding = endPaddingTicks !== ticksPerMeasure; // Don't add full measure if already aligned
+        
+        if (needsEndPadding) {
+            console.log(`Adding ${endPaddingTicks} ticks of padding to align end to downbeat`);
+        } else {
+            console.log('MIDI already ends on a downbeat');
+        }
+        
+        // Apply start alignment transformations
+        if (startPaddingTicks > 0 || startOffsetTicks > 0) {
+            // Shift everything for start alignment
+            midi.tracks.forEach(track => {
+                // Shift notes
+                if (track.notes) {
+                    track.notes.forEach(note => {
+                        if (startPaddingTicks > 0) {
+                            note.ticks += startPaddingTicks;
+                        } else {
+                            note.ticks = Math.max(0, note.ticks - startOffsetTicks);
+                        }
+                    });
+                }
+                
+                // Shift control changes
+                if (track.controlChanges) {
+                    Object.values(track.controlChanges).forEach(ccArray => {
+                        ccArray.forEach(cc => {
+                            if (startPaddingTicks > 0) {
+                                cc.ticks += startPaddingTicks;
+                            } else {
+                                cc.ticks = Math.max(0, cc.ticks - startOffsetTicks);
+                            }
+                        });
+                    });
+                }
+                
+                // Shift pitch bends
+                if (track.pitchBends) {
+                    track.pitchBends.forEach(bend => {
+                        if (startPaddingTicks > 0) {
+                            bend.ticks += startPaddingTicks;
+                        } else {
+                            bend.ticks = Math.max(0, bend.ticks - startOffsetTicks);
+                        }
+                    });
+                }
+                
+                // Shift program changes
+                if (track.programChanges) {
+                    track.programChanges.forEach(pc => {
+                        if (startPaddingTicks > 0) {
+                            pc.ticks += startPaddingTicks;
+                        } else {
+                            pc.ticks = Math.max(0, pc.ticks - startOffsetTicks);
+                        }
+                    });
+                }
+            });
+            
+            // Shift header events
+            if (midi.header.tempos) {
+                midi.header.tempos.forEach(tempo => {
+                    if (startPaddingTicks > 0) {
+                        tempo.ticks += startPaddingTicks;
+                    } else {
+                        tempo.ticks = Math.max(0, tempo.ticks - startOffsetTicks);
+                    }
+                });
+                
+                // Ensure there's always a tempo at tick 0 when shifting backward
+                if (startOffsetTicks > 0 && (midi.header.tempos.length === 0 || midi.header.tempos[0].ticks > 0)) {
+                    midi.header.tempos.unshift({
+                        bpm: midi.header.tempos[0]?.bpm || 120,
+                        ticks: 0
+                    });
+                }
+            }
+            
+            if (midi.header.timeSignatures) {
+                midi.header.timeSignatures.forEach(ts => {
+                    if (startPaddingTicks > 0) {
+                        ts.ticks += startPaddingTicks;
+                    } else {
+                        ts.ticks = Math.max(0, ts.ticks - startOffsetTicks);
+                    }
+                });
+                
+                // Ensure there's always a time signature at tick 0 when shifting backward
+                if (startOffsetTicks > 0 && (midi.header.timeSignatures.length === 0 || midi.header.timeSignatures[0].ticks > 0)) {
+                    midi.header.timeSignatures.unshift({
+                        timeSignature: midi.header.timeSignatures[0]?.timeSignature || [4, 4],
+                        ticks: 0
+                    });
+                }
+            }
+            
+            if (midi.header.keySignatures) {
+                midi.header.keySignatures.forEach(ks => {
+                    if (startPaddingTicks > 0) {
+                        ks.ticks += startPaddingTicks;
+                    } else {
+                        ks.ticks = Math.max(0, ks.ticks - startOffsetTicks);
+                    }
+                });
+            }
+        }
+        
+        // Add end padding if needed by extending the last notes
+        if (needsEndPadding) {
+            console.log(`Extending last notes by ${endPaddingTicks} ticks to align end to downbeat`);
+            
+            // Find the actual last note(s) across all tracks
+            let lastNoteTime = 0;
+            let lastNotes = [];
+            
+            midi.tracks.forEach(track => {
+                if (track.notes && track.notes.length > 0) {
+                    track.notes.forEach(note => {
+                        const noteEndTime = note.ticks + (note.durationTicks || note.duration * (midi.header.ppq || 96));
+                        if (noteEndTime > lastNoteTime) {
+                            lastNoteTime = noteEndTime;
+                            lastNotes = [note]; // Start new array with this note
+                        } else if (noteEndTime === lastNoteTime) {
+                            lastNotes.push(note); // Add to existing last notes
+                        }
+                    });
+                }
+            });
+            
+            if (lastNotes.length > 0) {
+                // Extend the duration of all notes that end at the last time
+                lastNotes.forEach(note => {
+                    const currentDuration = note.durationTicks || note.duration * (midi.header.ppq || 96);
+                    const newDuration = currentDuration + endPaddingTicks;
+                    
+                    // Update both tick-based and time-based duration
+                    note.durationTicks = newDuration;
+                    if (note.duration) {
+                        // Convert back to seconds if time-based duration exists
+                        const ppq = midi.header.ppq || 96;
+                        const bpm = midi.header.tempos?.[0]?.bpm || 120;
+                        note.duration = (newDuration / ppq) * (60 / bpm);
+                    }
+                });
+                
+                console.log(`Extended ${lastNotes.length} last note(s) by ${endPaddingTicks} ticks`);
+            } else {
+                console.warn('No last notes found to extend - MIDI may not end properly aligned');
+            }
+        }
+        
+        // Store alignment info
+        midi._startPaddingTicks = startPaddingTicks;
+        midi._startOffsetTicks = startOffsetTicks;
+        midi._endPaddingTicks = needsEndPadding ? endPaddingTicks : 0;
+        midi._originalFirstBarOffset = startOffsetTicks;
+        midi._alignmentInfo = {
+            startAligned: startAligned || (startPaddingTicks > 0) || (startOffsetTicks > 0),
+            endAligned: true,
+            originalEndTicks: midi.durationTicks,
+            finalEndTicks: currentEndTicks + (needsEndPadding ? endPaddingTicks : 0)
+        };
+        
+        return midi;
+    }
+
+    // Add a helper method for tick-to-seconds conversion if needed
+    ticksToSeconds(ticks, tempos, ppq) {
+        if (!tempos || tempos.length === 0) {
+            // Default tempo if none provided
+            return (ticks / ppq) * (60 / 120); // 120 BPM default
+        }
+        
+        let seconds = 0;
+        let currentTicks = 0;
+        let currentTempo = tempos[0];
+        let tempoIndex = 0;
+        
+        while (currentTicks < ticks && tempoIndex < tempos.length) {
+            const nextTempoTicks = (tempoIndex + 1 < tempos.length) ? 
+                tempos[tempoIndex + 1].ticks : ticks;
+            const ticksInThisSection = Math.min(nextTempoTicks, ticks) - currentTicks;
+            
+            const secondsPerTick = 60 / (currentTempo.bpm * ppq);
+            seconds += ticksInThisSection * secondsPerTick;
+            
+            currentTicks += ticksInThisSection;
+            if (currentTicks >= nextTempoTicks && tempoIndex + 1 < tempos.length) {
+                tempoIndex++;
+                currentTempo = tempos[tempoIndex];
+            }
+        }
+        
+        return seconds;
+    }
+
+    // Update your scheduleMIDIEvents method
     scheduleMIDIEvents(midi) {
-        console.log('Scheduling MIDI events:', midi);
-        this.originalMidi = midi;
+        // console.log('Scheduling MIDI events:', midi);
+        
+        // Align MIDI to start at first beat of first musical bar
+        this.originalMidi = this.alignMidiToFirstMusicalBar(midi);
+        
+        // Now first musical bar always starts at tick 0
+        this.firstMusicalBar = { ticks: 0, time: 0, method: 'aligned' };
+        
+        // Store info for score following
+        if (this.app.modules.scoreManager) {
+            this.app.modules.scoreManager.setFirstMusicalBar(this.firstMusicalBar);
+        }
 
         // Clear any previous scheduled parts
         this.parts.forEach(part => part.dispose());
@@ -371,6 +709,15 @@ class Transport {
         // Get player from audio engine instead of global
         const audioEngine = this.app.modules.audioEngine;
         const player = audioEngine?.getPlayer();
+
+        const midiPPQ = midi.header.ppq || 96;
+        Tone.Transport.PPQ = midiPPQ;
+
+        if (midi.header.tempos && midi.header.tempos.length > 0) {
+            Tone.Transport.bpm.value = midi.header.tempos[0].bpm;
+        } else {
+            Tone.Transport.bpm.value = 120;
+        }
 
 
         let channelNoteRanges = new Map(); // Track note ranges per channel
@@ -691,50 +1038,63 @@ class Transport {
                 const event = events.get(i);
                 if (event && event.original && event.value.number) {
                     event.value.number = event.original.number;
-                    console.log("Restored original number for event:", event);
+                    // console.log("Restored original number for event:", event);
                 }
                 if (event && event.original && event.value.value) {
                     event.value.value = event.original.value;
-                    console.log("Restored original value for event:", event);
+                    // console.log("Restored original value for event:", event);
                 }
             }
         }
     }
 
-    updateChannels() {
-        this.parts.forEach(part => {
-            // console.log("Updating part:", part, "with channel:", part.channel);
-            if (part._events) {
-                part._events.forEach(event => {
-                    // Update notes
-                    // Check if this is a note event and not channel 9 (drums)
-                    if (event.value && event.value.type === 'note' && event.value.channel !== 9) {
-                        // console.log("Updating channel:", event.value.channel, "original note:", event.value.midi);
-                        // Transform the note using the current app settings
-                        const transformedNote = this.app.transformNote(event.value.originalMidi, part.channel);
-                        event.value.midi = transformedNote;
-                        // console.log("Transformed to:", event.value.midi);
-                    }
-                    
-                    // Update pitch bend events
-                    if (event.value && event.value.type === 'pitchBend') {
-                        const state = this.app.state;
-                        let transformedValue = event.value.originalValue;
+    updateChannels() {        
+        try {
+            this.parts.forEach(part => {
+                // console.log("Processing part:", part);
+                // console.log("Updating part:", part, "with channel:", part.channel);
+                if (part._events) {
+                    part._events.forEach(event => {
+                        // Update notes
+                        // Check if this is a note event and not channel 9 (drums)
+                        if (event.value && event.value.type === 'note' && event.value.channel !== 9) {
+                            // console.log("Updating channel:", event.value.channel, "original note:", event.value.midi);
+                            // Transform the note using the current app settings
+                            const transformedNote = this.app.transformNote(event.value.originalMidi, part.channel);
+                            event.value.midi = transformedNote;
+                            // console.log("Transformed to:", event.value.midi);
+                        }
                         
-                        if (state.mode !== 0) { // If not in normal mode
-                            const normal = this.app.normal;
-                            const factor = (!normal) ? -1 : 1;
-                            transformedValue = event.value.originalValue * factor;
-                        }
-                        else {
-                            transformedValue = event.value.originalValue;
-                        }
+                        // Update pitch bend events
+                        if (event.value && event.value.type === 'pitchBend') {
+                            const state = this.app.state;
+                            let transformedValue = event.value.originalValue;
+                            
+                            if (state.mode !== 0) { // If not in normal mode
+                                const normal = this.app.normal;
+                                const factor = (!normal) ? -1 : 1;
+                                transformedValue = event.value.originalValue * factor;
+                            }
+                            else {
+                                transformedValue = event.value.originalValue;
+                            }
 
-                        event.value.value = (transformedValue + 1) * 8192;
-                    }
-                });
+                            event.value.value = (transformedValue + 1) * 8192;
+                        }
+                    });
+                }
+            });
+            
+            const scoreFollower = this.app.modules.scoreManager;
+            if (scoreFollower && scoreFollower.scoreShown) {
+                const updatedMidi = this.createCurrentMidi();
+                scoreFollower.generateABCStringfromMIDI(updatedMidi);
+                scoreFollower.updateScoreFollower('score', scoreFollower.currentBarStart, true);
             }
-        });
+
+        } catch (error) {
+            console.error("Error during score follower update:", error);
+        }
     }
 
     cleanup() {
@@ -755,7 +1115,7 @@ class Transport {
             return;
         }
 
-        console.log('Exporting MIDI file...');
+        // console.log('Exporting MIDI file...');
         const arrayBuffer = midi.toArray();
         const blob = new Blob([arrayBuffer], { type: 'audio/midi' });
         const url = URL.createObjectURL(blob);
@@ -767,217 +1127,302 @@ class Transport {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         
-        console.log('MIDI file exported successfully');
+        // console.log('MIDI file exported successfully');
     }
 
     createCurrentMidi() {
         try {
             if (!this.originalMidi) {
-                alert('No MIDI data available for export');
-                return;
+                console.error('No original MIDI data available for export');
+                return null;
             }
 
-            console.log('Creating new MIDI file from original with updated data:', this.app.state.userSettings);
+            // Validate original MIDI structure
+            if (!this.originalMidi.tracks || !Array.isArray(this.originalMidi.tracks)) {
+                console.error('Invalid MIDI tracks structure');
+                return null;
+            }
 
             // Create a new empty MIDI file
             const midi = new Midi();
             
-            console.log('Adding tracks with current transformations...');
-            
             const state = this.app.state;
-            const speedFactor = state.speed;
-            const isReversed = state.reversedPlayback;
+            const speedFactor = state.speed || 1.0;
+            const isReversed = state.reversedPlayback || false;
 
-            midi.header = JSON.parse(JSON.stringify(this.originalMidi.header));
+            // Deep copy and validate the header
+            try {
+                midi.header = JSON.parse(JSON.stringify(this.originalMidi.header));
+            } catch (error) {
+                console.error('Error copying MIDI header:', error);
+                midi.header = { ppq: 96 }; // Fallback header
+            }
 
-            // Get total ticks from the original MIDI header
+            // Get and validate total ticks
             const totalTicks = this.originalMidi.durationTicks;
+            if (!totalTicks || totalTicks <= 0 || !isFinite(totalTicks)) {
+                console.error('Invalid total ticks:', totalTicks);
+                return null;
+            }
 
-            // Update header tempos and time signatures with speed adjustment
-            if (speedFactor !== 1.0) {
-                // Scale tempo events
-                if (midi.header.tempos && midi.header.tempos.length > 0) {
-                    midi.header.tempos.forEach(tempo => {
-                        tempo.bpm = (this.app.bpm * state.speed).toFixed(2);
-                        tempo.ticks = tempo.ticks;
-                    });
+            // Validate and update header tempos
+            if (speedFactor !== 1.0 && midi.header.tempos && Array.isArray(midi.header.tempos)) {
+                midi.header.tempos.forEach(tempo => {
+                    if (tempo && typeof tempo.bpm === 'number' && isFinite(tempo.bpm)) {
+                        tempo.bpm = parseFloat((this.app.bpm * speedFactor).toFixed(2));
+                        // Clamp BPM to reasonable range
+                        tempo.bpm = Math.max(20, Math.min(300, tempo.bpm));
+                    }
+                    if (tempo && typeof tempo.ticks === 'number') {
+                        tempo.ticks = Math.max(0, Math.min(totalTicks, tempo.ticks));
+                    }
+                });
+            }
+
+            // Limit the number of tracks and events to prevent memory issues
+            const MAX_TRACKS = 16;
+            const MAX_NOTES_PER_TRACK = 10000;
+            const MAX_TOTAL_EVENTS = 50000;
+            
+            let totalEvents = 0;
+            let validTracksCount = 0;
+            
+            const tracksToProcess = this.originalMidi.tracks.slice(0, MAX_TRACKS);
+            
+            tracksToProcess.forEach((originalTrack, trackIndex) => {
+                if (!originalTrack || typeof originalTrack !== 'object') {
+                    console.warn(`Skipping invalid track ${trackIndex}`);
+                    return;
+                }
+
+                const channel = originalTrack.channel;
+                
+                // Validate channel
+                if (typeof channel !== 'number' || channel < 0 || channel > 15) {
+                    console.warn(`Skipping track ${trackIndex} with invalid channel:`, channel);
+                    return;
                 }
                 
-                // Scale time signature events
-                if (midi.header.timeSignatures && midi.header.timeSignatures.length > 0) {
-                    midi.header.timeSignatures.forEach(timeSig => {
-                        timeSig.ticks = timeSig.ticks;
-                    });
+                // Skip empty tracks or if we've hit the event limit
+                if (!originalTrack.notes || !Array.isArray(originalTrack.notes) || 
+                    originalTrack.notes.length === 0 || totalEvents >= MAX_TOTAL_EVENTS) {
+                    return;
                 }
-                console.log("Updated header tempos and time signatures:", midi.header, (this.app.bpm * state.speed).toFixed(2));
-            }
-            
-            // Process each track from the original MIDI
-            this.originalMidi.tracks.forEach((originalTrack, trackIndex) => {
-                const channel = originalTrack.channel;
+                
+                // Limit notes per track
+                const notesToProcess = originalTrack.notes.slice(0, MAX_NOTES_PER_TRACK);
                 
                 // Create a new track
                 const track = midi.addTrack();
-                track.name = originalTrack.name || `Track ${trackIndex}`;
+                track.name = (typeof originalTrack.name === 'string') ? 
+                    originalTrack.name.substring(0, 100) : `Track ${trackIndex}`; // Limit name length
                 track.channel = channel;
                 
-                // Add notes with current transformations and reversed timing if needed
-                originalTrack.notes.forEach(note => {
+                let validNotesCount = 0;
+                
+                // Add notes with strict validation and limits
+                notesToProcess.forEach((note, noteIndex) => {
+                    if (totalEvents >= MAX_TOTAL_EVENTS) return;
+                    
+                    // Comprehensive note validation
+                    if (!note || typeof note !== 'object') {
+                        console.warn(`Skipping invalid note ${noteIndex} in track ${trackIndex}`);
+                        return;
+                    }
+                    
+                    if (typeof note.midi !== 'number' || !isFinite(note.midi) || note.midi < 0 || note.midi > 127) {
+                        console.warn(`Skipping note with invalid MIDI value:`, note.midi);
+                        return;
+                    }
+                    
+                    if (typeof note.ticks !== 'number' || !isFinite(note.ticks) || note.ticks < 0 || note.ticks > totalTicks) {
+                        console.warn(`Skipping note with invalid ticks:`, note.ticks, 'totalTicks:', totalTicks);
+                        return;
+                    }
+                    
+                    if (typeof note.durationTicks !== 'number' || !isFinite(note.durationTicks) || note.durationTicks <= 0) {
+                        console.warn(`Note has invalid duration, using default:`, note.durationTicks);
+                        note.durationTicks = Math.min(96, totalTicks / 32); // Safe default
+                    }
+
                     let transformedMidi = note.midi;
                     if (channel !== 9) { // Skip drums channel
-                        transformedMidi = this.app.transformNote(note.midi, channel);
+                        try {
+                            transformedMidi = this.app.transformNote(note.midi, channel);
+                            // Validate transformed note
+                            if (!isFinite(transformedMidi) || transformedMidi < 0 || transformedMidi > 127) {
+                                console.warn('Transform produced invalid note, clamping:', transformedMidi);
+                                transformedMidi = Math.max(0, Math.min(127, Math.round(transformedMidi)));
+                            }
+                        } catch (error) {
+                            console.error('Error transforming note:', error);
+                            transformedMidi = note.midi; // Fallback to original
+                        }
                     }
                     
                     let finalTicks = note.ticks;
-                    let finalDurationTicks = note.durationTicks;
+                    let finalDurationTicks = Math.min(note.durationTicks, totalTicks - finalTicks);
                     
                     if (isReversed && note.ticks !== 0) {
-                        // Calculate reversed position similar to the scheduling logic
-                        const noteLength = (note.duration <= Tone.Time("8n").toSeconds()) ? 
-                            note.ticks : (note.ticks + ((channel !== 9) ? note.durationTicks : 0));
-                        finalTicks = totalTicks - noteLength;
-                        // Ensure we don't go below 0
-                        finalTicks = Math.max(0, finalTicks);
+                        // Safe reversed calculation
+                        try {
+                            const noteLength = (note.duration && note.duration <= Tone.Time("8n").toSeconds()) ? 
+                                note.ticks : (note.ticks + ((channel !== 9) ? note.durationTicks : 0));
+                            finalTicks = totalTicks - noteLength;
+                            finalTicks = Math.max(0, Math.min(totalTicks - finalDurationTicks, finalTicks));
+                        } catch (error) {
+                            console.error('Error calculating reversed timing:', error);
+                            finalTicks = Math.max(0, totalTicks - note.ticks - finalDurationTicks);
+                        }
                     }
                     
-                    track.addNote({
-                        midi: transformedMidi,
-                        ticks: finalTicks,
-                        durationTicks: finalDurationTicks,
-                        velocity: note.velocity
-                    });
+                    // Final validation of calculated values
+                    if (!isFinite(finalTicks) || finalTicks < 0 || finalTicks >= totalTicks) {
+                        console.warn('Final ticks out of range, clamping:', finalTicks);
+                        finalTicks = Math.max(0, Math.min(totalTicks - 1, finalTicks));
+                    }
+                    
+                    if (!isFinite(finalDurationTicks) || finalDurationTicks <= 0) {
+                        finalDurationTicks = Math.min(96, totalTicks - finalTicks);
+                    }
+                    
+                    // Ensure note doesn't extend beyond total duration
+                    finalDurationTicks = Math.min(finalDurationTicks, totalTicks - finalTicks);
+                    
+                    try {
+                        track.addNote({
+                            midi: Math.round(transformedMidi),
+                            ticks: Math.round(finalTicks),
+                            durationTicks: Math.round(Math.max(1, finalDurationTicks)),
+                            velocity: (typeof note.velocity === 'number' && isFinite(note.velocity)) ? 
+                                Math.max(0.1, Math.min(1, note.velocity)) : 0.7
+                        });
+                        validNotesCount++;
+                        totalEvents++;
+                    } catch (error) {
+                        console.error('Error adding note to track:', error, {
+                            midi: transformedMidi,
+                            ticks: finalTicks,
+                            durationTicks: finalDurationTicks,
+                            originalNote: note
+                        });
+                    }
                 });
-                
-                // Add control changes using current user settings and reversed timing if needed
-                if (originalTrack.controlChanges) {
-                    const trackSettings = this.app.state.userSettings["channels"][channel];
-                    let volSet = false;
-                    let revSet = false;
-                    let panSet = false;
-                    const volSliderId = "volumeSlider_" + channel;
-                    const panSliderId = "panSlider_" + channel;
-                    const reverbSliderId = "reverbSlider_" + channel;
 
-                    Object.entries(originalTrack.controlChanges).forEach(([ccNumber, ccEvents]) => {
-                        ccEvents.forEach(cc => {
-                            let currentValue = cc.value * 127;
-
-                            // Use current track setting value if available
-                            if (trackSettings !== undefined) {
-                                if (ccNumber == 7 && trackSettings[volSliderId] !== undefined) {
-                                    currentValue = parseInt(trackSettings[volSliderId]);
-                                    console.log('Using volume slider value:', currentValue);
-                                    volSet = true;
-                                }
-                                else if (ccNumber == 10 && trackSettings[panSliderId] !== undefined) {
-                                    currentValue = parseInt(trackSettings[panSliderId]) * 127;
-                                    console.log('Using pan slider value:', currentValue);
-                                    panSet = true;
-                                }
-                                else if (ccNumber == 91 && trackSettings[reverbSliderId] !== undefined) {
-                                    currentValue = parseInt(trackSettings[reverbSliderId]) * 127;
-                                    console.log('Using reverb slider value:', currentValue);
-                                    revSet = true;
-                                }
-                            }
+                // Only keep tracks that have valid notes
+                if (validNotesCount > 0) {
+                    validTracksCount++;
+                    
+                    // Add control changes with validation and limits
+                    if (originalTrack.controlChanges && typeof originalTrack.controlChanges === 'object' && 
+                        totalEvents < MAX_TOTAL_EVENTS) {
+                        const ccEntries = Object.entries(originalTrack.controlChanges).slice(0, 10); // Limit CC types
+                        
+                        ccEntries.forEach(([ccNumber, ccEvents]) => {
+                            if (!Array.isArray(ccEvents) || totalEvents >= MAX_TOTAL_EVENTS) return;
                             
-                            let finalTicks = cc.ticks;
-                            if (isReversed && cc.ticks !== 0) {
-                                finalTicks = totalTicks - cc.ticks;
-                                finalTicks = Math.max(0, finalTicks);
-                            }
+                            const limitedCCEvents = ccEvents.slice(0, 100); // Limit CC events per type
                             
-                            console.log("Handling CC:", ccNumber, "Value:", currentValue, "Ticks:", finalTicks, trackSettings);
-                            
-                            track.addCC({
-                                number: parseInt(ccNumber),
-                                value: currentValue,
-                                ticks: finalTicks
+                            limitedCCEvents.forEach(cc => {
+                                if (totalEvents >= MAX_TOTAL_EVENTS) return;
+                                if (!cc || typeof cc !== 'object') return;
+                                if (typeof cc.ticks !== 'number' || !isFinite(cc.ticks) || cc.ticks < 0 || cc.ticks >= totalTicks) return;
+                                if (typeof cc.value !== 'number' || !isFinite(cc.value)) return;
+                                
+                                let currentValue = Math.max(0, Math.min(127, Math.floor(cc.value * 127)));
+                                let finalTicks = cc.ticks;
+                                
+                                if (isReversed && cc.ticks !== 0) {
+                                    finalTicks = Math.max(0, Math.min(totalTicks - 1, totalTicks - cc.ticks));
+                                }
+                                
+                                try {
+                                    track.addCC({
+                                        number: Math.max(0, Math.min(127, parseInt(ccNumber))),
+                                        value: currentValue,
+                                        ticks: Math.round(finalTicks)
+                                    });
+                                    totalEvents++;
+                                } catch (error) {
+                                    console.error('Error adding CC:', error);
+                                }
                             });
                         });
-                    });
-
-                    if (!volSet && trackSettings !== undefined && trackSettings[volSliderId] !== undefined) {
-                        track.addCC({
-                            number: 7,
-                            value: parseInt(trackSettings[volSliderId]),
-                            ticks: 0
-                        });
-                        console.log("added missing volume CC:", parseInt(trackSettings[volSliderId]) * 127);
                     }
-                    if (!panSet && trackSettings !== undefined && trackSettings[panSliderId] !== undefined) {
-                        track.addCC({
-                            number: 10,
-                            value: parseInt(trackSettings[panSliderId]) * 127,
-                            ticks: 0
-                        });
-                        console.log("added missing pan CC:", parseInt(trackSettings[panSliderId]) * 127);
+                    
+                    // Set instrument with validation
+                    if (originalTrack.instrument && typeof originalTrack.instrument.number === 'number') {
+                        const programNumber = Math.max(0, Math.min(127, Math.round(originalTrack.instrument.number)));
+                        track.instrument = { number: programNumber };
                     }
-                    if (!revSet && trackSettings !== undefined && trackSettings[reverbSliderId] !== undefined) {
-                        track.addCC({
-                            number: 91,
-                            value: parseInt(trackSettings[reverbSliderId]) * 127,
-                            ticks: 0
-                        });
-                        console.log("added missing reverb CC:", parseInt(trackSettings[reverbSliderId]) * 127);
-                    }
-                }
-                
-                // Add pitch bends with transformations and reversed timing if needed
-                if (originalTrack.pitchBends && originalTrack.pitchBends.length > 0) {
-                    originalTrack.pitchBends.forEach(bend => {
-                        let transformedValue = bend.value;
-                        
-                        // Apply pitch bend transformation based on current mode
-                        if (state.mode !== 0) { // If not in normal mode
-                            const normal = this.app.normal;
-                            const factor = (!normal) ? -1 : 1;
-                            // Convert from MIDI pitch bend range back to normalized range
-                            const normalizedValue = (bend.value / 8192) - 1;
-                            transformedValue = (normalizedValue * factor + 1) * 8192;
-                        }
-                        
-                        let finalTicks = bend.ticks;
-                        if (isReversed && bend.ticks !== 0) {
-                            finalTicks = totalTicks - bend.ticks;
-                            finalTicks = Math.max(0, finalTicks);
-                        }
-                        
-                        track.addPitchBend({
-                            value: transformedValue,
-                            ticks: finalTicks
-                        });
-                    });
-                }
-                
-                // Set instrument using current user settings
-                let programNumber = originalTrack.instrument?.number;
-                const userSettings = this.app.state.userSettings;
-                
-                // Use current program change setting if available
-                const upId = "instrumentSelect_" + channel;
-                if (userSettings && userSettings.channels && userSettings.channels[channel] && userSettings.channels[channel][upId] !== undefined) {
-                    programNumber = parseInt(userSettings.channels[channel][upId]);
-                    console.log('Using instrument select value:', programNumber);
                 } else {
-                    console.log("no instrument select setting found:", upId, userSettings);
+                    // Remove empty track
+                    midi.tracks.pop();
                 }
-                
-                if (programNumber !== undefined) {
-                    track.instrument = {
-                        number: programNumber
-                    };
-                }
-                
-                console.log(`Added track ${trackIndex} (channel ${channel}) with ${originalTrack.notes.length} notes`);
             });
 
+            // Validate the final MIDI object
+            if (validTracksCount === 0 || !midi.tracks || midi.tracks.length === 0) {
+                console.error('No valid tracks created');
+                return null;
+            }
+
+            // Ensure proper MIDI structure
+            try {
+                // Set safe defaults for header if missing
+                if (!midi.header.ppq || midi.header.ppq <= 0) {
+                    midi.header.ppq = 96;
+                }
+                
+                if (!midi.header.tempos || midi.header.tempos.length === 0) {
+                    midi.header.tempos = [{ bpm: 120, ticks: 0 }];
+                }
+                
+                if (!midi.header.timeSignatures || midi.header.timeSignatures.length === 0) {
+                    midi.header.timeSignatures = [{ timeSignature: [4, 4], ticks: 0 }];
+                }
+            } catch (error) {
+                console.error('Error setting MIDI header defaults:', error);
+            }
+
+            // Final validation of the MIDI structure with memory check
+            try {
+                // Force garbage collection if available
+                if (window.gc) {
+                    window.gc();
+                }
+                
+                // Test if the MIDI can be serialized without errors
+                const testArray = midi.toArray();
+                if (!testArray || testArray.length === 0) {
+                    console.error('Generated MIDI produces empty array');
+                    return null;
+                }
+                
+                // Check if the generated MIDI is too large
+                const maxSize = 5 * 1024 * 1024; // 5MB limit
+                if (testArray.length > maxSize) {
+                    console.error('Generated MIDI is too large:', testArray.length, 'bytes');
+                    return null;
+                }
+                
+            } catch (error) {
+                console.error('Generated MIDI fails validation:', error);
+                return null;
+            }
+
+            // console.log(`Successfully created MIDI with ${validTracksCount} valid tracks and ${totalEvents} total events`);
             return midi;
 
         } catch (error) {
-            console.error('Error creating MIDI file:', error);
+            console.error('Fatal error creating MIDI file:', error);
             console.error('Error stack:', error.stack);
-            alert('Failed to create MIDI file. Please check the console for details.');
+            
+            // Force cleanup on error
+            if (window.gc) {
+                window.gc();
+            }
+            
             return null;
         }
     }

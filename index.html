@@ -46,10 +46,25 @@
 
                 link.href = "javascript:void(0);";
                 link.onclick = function() {
-                  app.modules.transport.preclean();
-                  const settingsManager = app.modules.settingsManager;
-                  settingsManager.checkForParamsInUrl(new URL(data[artist][song]).searchParams);
-                  // settingsManager.share();
+                  try {
+                    const scoreFollower = app.modules.scoreManager;
+                    if (scoreFollower && scoreFollower.scoreShown) {
+                      scoreFollower.hideScore();
+                    }
+                    
+                    // Ensure transport is properly cleaned before loading new content
+                    app.modules.transport.preclean();
+                    
+                    // Add a small delay to ensure cleanup is complete
+                    setTimeout(() => {
+                      const settingsManager = app.modules.settingsManager;
+                      settingsManager.checkForParamsInUrl(new URL(data[artist][song]).searchParams);
+                    }, 100);
+                    
+                  } catch (error) {
+                    console.error('Error loading example:', error);
+                    Utils.showError('Failed to load example: ' + error.message);
+                  }
                 };
                 link.textContent = song;
 
@@ -89,13 +104,13 @@
       <div style="display: flex; width: 100%;">
         <a class="remain" style="display: none; box-shadow: 0 0 10px rgb(215, 118, 21); width: 50px; height: 50px; background-color: rgba(255, 255, 255, 0.359); border-radius: 3px; border: 1px solid white;" href="javascript:void(0);" onclick="app.modules.settingsManager.shareAndCopy();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
         <button class="btn btn-outline-danger remain" id="playMidi" style="margin-left: 20px; min-height: 50px; color: rgb(255, 119, 0); font-weight: bold; background-color: rgba(156, 0, 0, 0.622); text-shadow: 0 0 15px rgb(63, 18, 18); flex-grow: 1;">Play MIDI</button>
-        <button class="btn btn-outline-light" id="showScore" style="margin-left: 20px; min-height: 50px; display: flex; align-items: center; justify-content: center;" onclick="app.modules.scoreManager.showMidiScore(true);">Score</button>
+        <button class="btn btn-outline-light" id="showScore" style="display:none; margin-left: 20px; min-height: 50px; display: flex; align-items: center; justify-content: center;" onclick="app.modules.scoreManager.showScore(true);">Score</button>
       </div>
     </div>
     <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0" class="form-range">
   </div>
   <div style="display: flex; justify-content: center;">
-    <div id="scoreContainer" style="display: none; margin-top: 20px; padding: 20px; background-color: rgba(0, 0, 0, 0.184); border-radius: 5px; max-width: 870px;">
+    <div id="scoreContainer" style=" border: 1px solid white; display: none; margin-top: 20px; padding: 20px; background-color: rgba(0, 0, 0, 0.184); border-radius: 5px; max-width: 870px;">
       <div class="score-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; position: relative;">
         <h4 style="margin: 0;">Music Score</h4>
         <button class="btn btn-outline-light btn-sm" onclick="app.modules.scoreManager.hideScore();">Close</button>
@@ -126,7 +141,7 @@
               <input type="range" id="speedControl" min="0.5" max="2" value="1" step="0.01" class="form-range"/>
               <input id="reverseMidi" class="btn-check" type="checkbox">
                   <label class="btn btn-outline-light" for="reverseMidi">reverse</label><br>
-              <button class="btn btn-outline-success" id="downloadMidi" style="margin-bottom: 10px;" onclick="app.modules.transport.downloadCurrentMidi();">Download MIDI</button>
+              <button class="btn btn-outline-success" id="downloadMidi" style="margin-top: 10px; display:none;" onclick="app.modules.transport.downloadCurrentMidi();">Download MIDI</button>
             </div>
             <div>
               <div id="midiIn">
@@ -189,8 +204,8 @@
               <div>
                 <select id="parameter_perOktave" class="form-select" onchange="app.setPerOctave(this.value);">
                   <option value="0">Total</option>
-                  <option value="1" selected>per Octave</option>
-                  <option value="2">per Voice</option>
+                  <option value="1">per Octave</option>
+                  <option value="2" selected>per Voice</option>
                 </select>
               </div>
             </div>

@@ -76,13 +76,13 @@ class AudioEngine {
         if (channel === 9) {
             // Drum channel
             if (!this.drumInstrument || !this.drumInstrument.notes.has(note.midi)) {
-                console.log('Drum instrument not available for note:', note.midi);
+                // console.log('Drum instrument not available for note:', note.midi);
                 return;
             }
             
             const drumPreset = this.drumInstrument.notes.get(note.midi);
             if (drumPreset === "loading" || drumPreset === undefined || !window[drumPreset]) {
-                console.log('Drum sound is missing or still loading:', note.midi, drumPreset);
+                // console.log('Drum sound is missing or still loading:', note.midi, drumPreset);
                 return;
             }
             
@@ -99,12 +99,12 @@ class AudioEngine {
             // Regular instrument channel
             const instrument = this.loadedChannelInstruments.get(channel);
             if (!instrument) {
-                console.log('No instrument loaded for channel:', channel);
+                // console.log('No instrument loaded for channel:', channel);
                 return;
             }
             
             if (instrument.preset === "loading" || instrument.preset === undefined) {
-                console.log('Instrument still loading for channel:', channel, 'preset:', instrument.preset);
+                // console.log('Instrument still loading for channel:', channel, 'preset:', instrument.preset);
                 return;
             }
             

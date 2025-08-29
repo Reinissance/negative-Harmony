@@ -41,11 +41,11 @@ class NegativeHarmonyApp {
         try {
             // Load external libraries first
             await this.loadLibraries();
-            console.log('All libraries loaded successfully');
+            // console.log('All libraries loaded successfully');
             
             // Load modules after libraries
             await this.loadModules();
-            console.log('All modules loaded successfully');
+            // console.log('All modules loaded successfully');
             
             // Initialize modules after everything is loaded
             this.initializeModules();
@@ -328,6 +328,7 @@ class NegativeHarmonyApp {
         if (urlParams.toString().length > 0) {
             await this.modules.settingsManager.checkForParamsInUrl(urlParams);
             this.modules.settingsManager.share();
+            Utils.setPlayButtonActive(true);
         }
     }
 
@@ -355,7 +356,6 @@ class NegativeHarmonyApp {
     setNegRoot(value) {
         const intValue = parseInt(value, 10);
         this.state.negRoot = intValue;
-
         this.modules.transport.updateChannels();
 
         this.modules.midiManager.sendEvent_allNotesOff();

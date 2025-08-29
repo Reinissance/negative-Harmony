@@ -25,11 +25,11 @@ class MidiManager {
         // request midi devices acces from user
         if (navigator.requestMIDIAccess) {
             try {
-                console.log('Requesting MIDI access after user gesture...');
+                // console.log('Requesting MIDI access after user gesture...');
                 const midiAccess = await navigator.requestMIDIAccess();
                 
                 this.onMIDISuccess(midiAccess);
-                    console.log('MIDI access granted and handled by modular system');
+                    // console.log('MIDI access granted and handled by modular system');
             } catch (error) {
                 console.warn('MIDI access denied or failed:', error);
                 this.onMIDIFailure(error);
@@ -144,6 +144,8 @@ class MidiManager {
         
         // Update app state
         const state = this.app.state;
+        state.perOktave = 2;
+        console.error("perOktave pre PARSE:", state.perOktave);
         this.app.midiFileRead = true;
         this.app.track_duration = midiData.duration;
         state.speed = 1.0;
@@ -203,7 +205,7 @@ class MidiManager {
         this.midioutPort = midiOutputs[this.midiOutputsSelect.value];
         if (this.midioutPort) {
             this.midioutPort.onmidimessage = (message) => this.onMidiOutMessage(message);
-            console.log("Selected MIDI output:", this.midioutPort.name);
+            // console.log("Selected MIDI output:", this.midioutPort.name);
         }
     }
 
@@ -222,7 +224,7 @@ class MidiManager {
             // External MIDI
             try {
                 this.midioutPort.send(message);
-                console.log("MIDI out message:", message, "to port:", this.midioutPort.name);
+                // console.log("MIDI out message:", message, "to port:", this.midioutPort.name);
             } catch (error) {
                 console.error("Error sending MIDI message:", error);
             }

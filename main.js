@@ -10,7 +10,7 @@ async function initializeModularSystem() {
             // IMPORTANT: Initialize the app and its modules
             await app.init();
             
-            console.log('Modular system initialized successfully');
+            // console.log('Modular system initialized successfully');
             moduleLoaded();
         }
     } catch (error) {
@@ -23,13 +23,11 @@ function moduleLoaded() {
     const toggler = document.getElementsByClassName("st-toggle")[0];
     if (toggler)
         toggler.style.display = "none";
-    Utils.setPlayButtonActive(true);
 }
 
-function start() {
-    // make playbutton unrespondable
+function start() {// make playbutton unrespondable
     Utils.setPlayButtonActive(false);
-
+    document.getElementById("playMidi").innerText = "no MIDI file loaded.";
     initializeModularSystem();
 }
 
@@ -43,6 +41,7 @@ function toggleTransport(element) {
 }
 
 function reloadWithUrl() {
+    console.log("Reload from main");
     const midiFileUrl = document.getElementById("midiUrl").value;
     if (midiFileUrl) {
         if (!midiFileUrl.endsWith(".mid") && !midiFileUrl.endsWith(".midi")) {
@@ -57,12 +56,15 @@ function reloadWithUrl() {
         fetch(midiFileUrl)
             .then(response => response.arrayBuffer())
             .then(data => {
+                app.localFile = false;
                 app.modules.transport.preclean();
                 app.modules.transport.cleanup();
                 app.modules.midiManager.parseMidiFile(new Midi(data));
                 app.modules.settingsManager.share();
                 document.getElementById("midiUrl").value = midiFileUrl;
                 Utils.setPlayButtonActive(true);
+                const settingsManager = app.modules.settingsManager;
+                settingsManager.share();
             })
             .catch(error => {
                 console.log(error);

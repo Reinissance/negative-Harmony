@@ -53,6 +53,7 @@ class SettingsManager {
     }
 
     async checkForParamsInUrl(urlParams) {
+        let settingsFound = false;
         const state = this.app.state;
 
         // Global settings
@@ -66,6 +67,7 @@ class SettingsManager {
             if (state.reversedPlayback) {
                 keepReversed = true;
             }
+            settingsFound = true;
         }
         
         const negRootParam = urlParams.get('negRoot');
@@ -79,6 +81,7 @@ class SettingsManager {
                     break;
                 }
             }
+            settingsFound = true;
         }
         
         const perOktaveParam = urlParams.get('perOktave');
@@ -88,6 +91,7 @@ class SettingsManager {
             this.debouncedUpdateUserSettings("perOktave", state.perOktave, -1);
             const oktSelect = document.getElementById("parameter_perOktave");
             oktSelect.selectedIndex = state.perOktave;
+            settingsFound = true;
         }
         
         const modeParam = urlParams.get('mode');
@@ -97,6 +101,7 @@ class SettingsManager {
             modeSelect.selectedIndex = state.mode;
             this.app.setModeSettingsHidden();
             this.debouncedUpdateUserSettings("mode", state.mode, -1);
+            settingsFound = true;
         }
         
         const irUrlParam = urlParams.get('irUrl');
@@ -114,6 +119,7 @@ class SettingsManager {
                 reverbSelect.selectedIndex = state.irUrl;
                 this.debouncedUpdateUserSettings("irUrl", state.irUrl, -1);
             }
+            settingsFound = true;
         } else {
             // Load default impulse response
             if (audioEngine && audioEngine.setIR) {
@@ -138,6 +144,7 @@ class SettingsManager {
                 }
                 this.debouncedUpdateUserSettings("reverbGain", state.reverbGain, -1);
             }
+            settingsFound = true;
         }
         
         // Handle MIDI file loading
@@ -153,6 +160,7 @@ class SettingsManager {
                 // console.error("Forcing update of channel ranges after loading MIDI file.");
                 transport.forceUpdateChannel = false;
             }
+            settingsFound = true;
         } else {
             // No MIDI file, load default piano
             Utils.setPlayButtonActive(true);
@@ -170,6 +178,9 @@ class SettingsManager {
         }
 
         state.reversedPlayback = keepReversed;
+        if (settingsFound) {
+            this.share();
+        }
     }
 
     share() {
@@ -232,7 +243,7 @@ class SettingsManager {
             const response = await fetch(midiFileUrl);
             const data = await response.arrayBuffer();
             
-            this.app.state.localFile = false;
+            this.app.localFile = false;
             const midiManager = this.app.modules.midiManager;
             if (midiManager) {
                 midiManager.parseMidiFile(new Midi(data));
@@ -673,7 +684,7 @@ class SettingsManager {
                     })
                     .catch((error) => console.error('Error loading drum sound:', error));
             } else {
-                console.log("Audio engine not available, cannot load drum sound.");
+                console.warn("Audio engine not available, cannot load drum sound.");
             }
         };
         noteSfSelect.classList.add("form-select");
@@ -701,7 +712,7 @@ class SettingsManager {
 
     resetChannelSettings(channel) {
         const fileSettings = this.app.fileSettings;
-        console.log("Restoring original settings for channel:", channel, fileSettings);
+        // console.log("Restoring original settings for channel:", channel, fileSettings);
 
         if (fileSettings[channel]) {
             for (const setting in fileSettings[channel]) {
@@ -744,7 +755,7 @@ class SettingsManager {
             channels: {}
         };
         
-        console.log('User settings reset to defaults');
+        // console.log('User settings reset to defaults');
     }
 
     showResetButtonIfNeeded(channel) {
@@ -787,7 +798,7 @@ class SettingsManager {
             Object.assign(state, settings.globalSettings);
         }
         
-        console.log('Settings imported successfully');
+        // console.log('Settings imported successfully');
     }
 }
 
