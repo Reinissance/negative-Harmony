@@ -213,29 +213,11 @@ class SettingsManager {
     shareAndCopy() {
         const shareUrl = this.share();
         navigator.clipboard.writeText(shareUrl).then(() => {
-            this.showShareNotification('Share URL copied to clipboard!');
+            alert("Note: Please only share examples that are your own work or come from the public domain. Do NOT share copyrighted music without permission. \n\nThe share URL is copied to clipboard.");
         }).catch(err => {
             console.error('Failed to copy share URL: ', err);
             Utils.copyToClipboard(shareUrl);
         });
-    }
-
-    showShareNotification(message) {
-        const notification = document.createElement('div');
-        notification.innerText = message;
-        notification.style.width = 'fit-content';
-        notification.style.left = '10000px'; // hacky: remains in the right corner
-        notification.style.bottom = '10px';
-        notification.style.position = 'sticky';
-        notification.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-        notification.style.color = 'white';
-        notification.style.padding = '10px';
-        notification.style.borderRadius = '5px';
-        document.body.appendChild(notification);
-        
-        setTimeout(() => {
-            notification.remove();
-        }, 3000);
     }
 
     async loadMidiFileFromUrl(midiFileUrl, urlParams) {
