@@ -1,23 +1,45 @@
 /**
  * Transport Module
- * Handles play/pause/stop functionality, progress tracking, and speed control
+ * Handles MIDI playback control, timing, speed adjustment, and score synchronization.
+ * Manages Tone.js transport integration and MIDI event scheduling.
  */
 
+/**
+ * Manages MIDI playback transport, including play/pause/stop, progress tracking, 
+ * speed control, and real-time score following synchronization
+ * @class Transport
+ */
 class Transport {
+    /**
+     * Creates an instance of Transport
+     * @param {Object} app - Reference to the main application instance
+     */
     constructor(app) {
         this.app = app;
+        /** @type {boolean} Whether playback is currently active */
         this.playing = false;
+        /** @type {Array} Array of Tone.Part instances for scheduled MIDI events */
         this.parts = [];
+        /** @type {HTMLElement|null} Progress slider element for playback position */
         this.progressSlider = null;
-        this.forceUpdateChannel = false; // Flag to force update channel ranges
+        /** @type {boolean} Flag to force channel range updates after MIDI loading */
+        this.forceUpdateChannel = false;
+        /** @type {Object|null} Original MIDI data before transformations */
         this.originalMidi = null;
     }
 
+    /**
+     * Initialize the transport module and set up event listeners
+     * @async
+     */
     async init() {
         this.progressSlider = document.getElementById('progress-input');
         this.setupEventListeners();
     }
 
+    /**
+     * Sets up event listeners for transport controls
+     */
     setupEventListeners() {
         // Play/Stop button
         const playButton = document.getElementById('playMidi');
@@ -25,7 +47,7 @@ class Transport {
             playButton.addEventListener('click', () => this.togglePlayback());
         }
 
-        // Speed control
+        // Speed control slider
         const speedControl = document.getElementById('speedControl');
         if (speedControl) {
             speedControl.addEventListener('input', (event) => this.handleSpeedChange(event));
@@ -34,14 +56,18 @@ class Transport {
         this.setupTransportControls();
     }
 
+    /**
+     * Sets up additional transport controls (reverse, progress slider)
+     */
     setupTransportControls() {
-    // Reverse MIDI checkbox
+        // Reverse MIDI checkbox - handles reversed playback mode
         document.getElementById('reverseMidi').addEventListener('click', (event) => {
             const state = this.app.state;
             if (state.reversedPlayback === event.target.checked) {
                 return;
             }
             state.reversedPlayback = event.target.checked;
+            // Adjust playback position for reverse mode
             const position = this.app.track_duration / state.speed - Tone.Transport.seconds;
             Tone.Transport.seconds = position;
             
@@ -50,6 +76,7 @@ class Transport {
                 settingsManager.updateUserSettings("reversedPlayback", state.reversedPlayback, -1);
             }
             
+            // Update score and stop all notes after mode change
             setTimeout(() => {
                 const midiManager = this.app.modules.midiManager;
                 if (midiManager) {
@@ -64,22 +91,25 @@ class Transport {
             }, 300);
         });
 
-        // Progress slider
+        // Progress slider for manual seek
         this.setupProgressSlider();
-        
     }
 
+    /**
+     * Sets up the progress slider for manual playback position control
+     */
     setupProgressSlider() {
         const progressSlider = document.getElementById('progress-input');
         if (!progressSlider) return;
-        const state = this.app.state;
 
         progressSlider.oninput = (event) => {
             const state = this.app.state;
             const position = (event.target.value / 100) * (this.app.track_duration / state.speed);
+            // Handle reversed playback positioning
             Tone.Transport.seconds = state.reversedPlayback ? 
                 (this.app.track_duration / state.speed) - position : position;
 
+            // Stop all notes after seeking to prevent hanging notes
             setTimeout(() => {
                 const midiManager = this.app.modules.midiManager;
                 if (midiManager) {
@@ -89,8 +119,10 @@ class Transport {
         };
     }
 
+    /**
+     * Toggles between play and stop states
+     */
     togglePlayback() {
-        const state = this.app.state;
         const playBtn = document.getElementById('playMidi');
 
         if (!this.playing) {
@@ -104,12 +136,16 @@ class Transport {
         }
     }
 
+    /**
+     * Starts MIDI playback and initializes score following if needed
+     * @param {HTMLElement} playBtn - The play button element to update
+     */
     startPlayback(playBtn) {
         playBtn.innerText = "Stop Playback";
         this.playing = true;
         Tone.Transport.position = 0;
         
-        // Notify score manager BEFORE starting transport
+        // Notify score manager BEFORE starting transport for proper synchronization
         const scoreManager = this.app.modules.scoreManager;
         if (scoreManager && scoreManager.scoreShown) {
             // Start polling for score following immediately
@@ -120,16 +156,22 @@ class Transport {
         // Start transport after score manager is ready
         Tone.Transport.start();
         
+        // Set up progress tracking and auto-stop detection
         if (this.progressSlider) {
             this.progressSlider.style.display = "block";
             const state = this.app.state;
-            // Update the progress slider during playback
+            
+            // Schedule regular progress updates during playback
             Tone.Transport._scheduledRepeatId = Tone.Transport.scheduleRepeat((time) => {
                 const position = Tone.Transport.seconds;
-                const progress = ((state.reversedPlayback ? (this.app.track_duration / state.speed) - position : position) / (this.app.track_duration / state.speed)) * 100;
+                const progress = ((state.reversedPlayback ? 
+                    (this.app.track_duration / state.speed) - position : position) / 
+                    (this.app.track_duration / state.speed)) * 100;
                 this.progressSlider.value = progress;
 
-                if ((!state.reversedPlayback && progress >= 100) || (state.reversedPlayback && progress <= 0)) {
+                // Auto-stop at end of track
+                if ((!state.reversedPlayback && progress >= 100) || 
+                    (state.reversedPlayback && progress <= 0)) {
                     playBtn.innerText = "Play MIDI";
                     setTimeout(() => {
                         this.playing = false;
@@ -146,10 +188,14 @@ class Transport {
                     this.progressSlider.style.display = "none";
                     this.app.modules.midiManager.sendEvent_allNotesOff();
                 }
-            }, "4n");
+            }, "4n"); // Update every quarter note
         }
     }
 
+    /**
+     * Stops MIDI playback and resets transport position
+     * @param {HTMLElement} playBtn - The play button element to update
+     */
     stopPlayback(playBtn) {
         Tone.Transport.stop();
         Tone.Transport.position = 0;
@@ -160,9 +206,8 @@ class Transport {
         if (scoreManager) {
             scoreManager.stopPollingForPlayback();
             
-            // If score is currently shown, reset to first 4 bars
+            // Reset score follower to beginning if active
             if (scoreManager.scoreShown && scoreManager.scoreFollowerActive) {
-                // console.log('Playback stopped - resetting score follower to beginning');
                 scoreManager.resetScoreFollower('score');
             }
         }
@@ -177,22 +222,25 @@ class Transport {
             Tone.Transport.clear(Tone.Transport._scheduledRepeatId);
         }
 
-        //send all notes off after 0.5 seconds to ensure all notes are released
+        // Send all notes off after delay to ensure all notes are released
         setTimeout(() => {
             this.app.modules.midiManager.sendEvent_allNotesOff();
-            // send sustain pedal off
             this.app.modules.midiManager.sendEvent_sustainPedalOff();
         }, 500);
         
         this.playing = false;
     }
 
+    /**
+     * Sets playback speed and updates all related systems
+     * @param {number} value - Speed multiplier (0.5 to 2.0)
+     */
     setSpeed(value) {
         const state = this.app.state;
         const wasPlaying = this.playing;
         const currentPosition = Tone.Transport.seconds;
         
-        // Stop transport and clear all scheduled events if playing
+        // Stop transport and clear all scheduled events if currently playing
         if (wasPlaying) {
             Tone.Transport.stop();
             Tone.Transport.cancel();
@@ -205,7 +253,7 @@ class Transport {
         state.speed = parseFloat(value);
         Tone.Transport.bpm.value = (this.app.bpm * state.speed).toFixed(2);
 
-        // Update UI elements...
+        // Update UI elements to reflect new speed
         const label = document.querySelector('label[for="speedControl"]');
         if (label) {
             label.textContent = "Playback Speed: " + (this.app.bpm * state.speed).toFixed(2) + " BPM";
@@ -216,12 +264,13 @@ class Transport {
             speedSlider.value = state.speed;
         }
         
+        // Show/hide speed reset button
         const resetBtn = document.getElementById("resetSpeed");
         if (resetBtn) {
             resetBtn.style.display = (state.speed === 1.0) ? "none" : "block";
         }
 
-        // Notify score manager of speed change
+        // Notify score manager of speed change for timing adjustments
         const scoreManager = this.app.modules.scoreManager;
         if (scoreManager && scoreManager.scoreShown) {
             // Reset score follower position to account for timing changes
@@ -231,6 +280,7 @@ class Transport {
             }, 200);
         }
 
+        // Restart playback if it was active
         if (wasPlaying) {
             this.parts.forEach(part => {
                 part.stop();
@@ -243,6 +293,7 @@ class Transport {
                 Tone.Transport.start();
             }, 100);
         } else {
+            // Ensure all notes are off when speed changes during pause
             setTimeout(() => {
                 const midiManager = this.app.modules.midiManager;
                 midiManager.sendEvent_allNotesOff();
@@ -253,10 +304,18 @@ class Transport {
         this.app.modules.settingsManager.updateUserSettings("speed", state.speed, -1);
     }
 
+    /**
+     * Handles speed control slider changes
+     * @param {Event} event - Input event from speed slider
+     */
     handleSpeedChange(event) {
         this.setSpeed(parseFloat(event.target.value));
     }
 
+    /**
+     * Performs cleanup before loading new MIDI file
+     * Stops playback, resets transport, and cleans up resources
+     */
     preclean() {
         const state = this.app.state;
         
@@ -265,7 +324,7 @@ class Transport {
             this.playing = false;
             state.reversedPlayback = false;
             
-            // Update UI elements
+            // Update UI elements to reflect stopped state
             const reverseMidiCheckbox = document.getElementById("reverseMidi");
             if (reverseMidiCheckbox) {
                 reverseMidiCheckbox.checked = false;
@@ -281,52 +340,63 @@ class Transport {
                 this.progressSlider.style.display = "none";
             }
             
-            // Clear transport state
+            // Clear transport state completely
             Tone.Transport.cancel();
             Tone.Transport.position = 0;
             Tone.Transport.seconds = 0;
             
-            // Send all notes off
+            // Send all notes off to prevent hanging notes
             const midiManager = this.app.modules.midiManager;
             if (midiManager) {
                 midiManager.sendEvent_allNotesOff();
             } else {
                 console.warn('No MIDI manager available to send all notes off');
             }
+            
+            // Hide sharing UI elements
             document.getElementById("hiddenShareButton").style.display = "none";
             const shares = document.getElementById("st-1")
             if (shares) {
                 shares.style.display = "none";
             }
+            
+            // Clear score data
             const scoreManager = this.app.modules.scoreManager;
             if (scoreManager) {
                 scoreManager.abcString = "";
             }
         }
         
-        // Make play button unresponsive
+        // Disable play button during cleanup
         Utils.setPlayButtonActive(false);
         
-        // Clean up if MIDI file was read
+        // Clean up audio engine resources
         if (this.app.midiFileRead) {
-            // Use audio engine cleanup if available
             this.app.modules.audioEngine.cleanup();
         }
     }
 
+    /**
+     * Fires a MIDI event during playback, handling direction and timing
+     * @param {Object} event - MIDI event object with type, timing, and data
+     * @param {number} time - Scheduled time for the event
+     */
     fireMidiEvent(event, time) {
         const state = this.app.state;
         
+        // Only fire events that match current playback direction
         if (event.reversed !== state.reversedPlayback) {
             return;
         }
         
         switch (event.type) {
             case 'note':
+                // Send note on message
                 this.handleMidiMessage({
                     data: [0x90 + event.channel, event.midi, event.velocity]
                 });
                 
+                // Schedule note off message
                 const noteOffTime = Tone.Transport.seconds + event.duration / state.speed;
                 Tone.Transport.schedule((releaseTime) => {
                     this.handleMidiMessage({
@@ -354,6 +424,7 @@ class Transport {
                 break;
                 
             case 'tempo':
+                // Update tempo display in real-time
                 Tone.Draw.schedule((time) => {
                     const label = document.querySelector('label[for="speedControl"]');
                     if (label) {
@@ -364,6 +435,10 @@ class Transport {
         }
     }
 
+    /**
+     * Routes MIDI messages to the appropriate handler
+     * @param {Object} message - MIDI message object with data array
+     */
     handleMidiMessage(message) {
         // Delegate to MIDI manager if available
         const midiManager = this.app.modules.midiManager;
@@ -374,16 +449,21 @@ class Transport {
         }
     }
 
+    /**
+     * Detects the first bar that contains actual musical content (notes)
+     * @param {Object} midi - MIDI file object to analyze
+     * @returns {Object} Information about the first musical bar
+     */
     detectFirstBarWithMusic(midi) {
         const ppq = midi.header.ppq || 96;
         const timeSignature = midi.header.timeSignatures?.[0]?.timeSignature || [4, 4];
         const [numerator, denominator] = timeSignature;
         
-        // Calculate ticks per beat and measure
+        // Calculate timing values based on time signature
         const ticksPerBeat = ppq * (4 / denominator);
         const ticksPerMeasure = ticksPerBeat * numerator;
         
-        // Collect all musical events (notes, not just control changes)
+        // Collect all musical events (notes only, not control changes)
         const musicalEvents = [];
         midi.tracks.forEach(track => {
             // Only count actual notes as musical events
@@ -398,7 +478,7 @@ class Transport {
             return { ticks: 0, time: 0, method: 'noMusic' };
         }
         
-        // Sort events by time
+        // Sort events by time to find the earliest
         musicalEvents.sort((a, b) => a - b);
         
         // Find the first musical event
@@ -407,18 +487,25 @@ class Transport {
         // Calculate which bar this event falls into
         const barNumber = Math.floor(firstEventTicks / ticksPerMeasure);
         
-        // The first beat of that bar
+        // Calculate the first beat of that bar
         const firstBeatOfFirstMusicalBar = barNumber * ticksPerMeasure;
         
         return {
             ticks: firstBeatOfFirstMusicalBar,
-            time: this.ticksToSeconds ? this.ticksToSeconds(firstBeatOfFirstMusicalBar, midi.header.tempos || [{ bpm: 120, ticks: 0 }], ppq) : 0,
+            time: this.ticksToSeconds ? this.ticksToSeconds(firstBeatOfFirstMusicalBar, 
+                midi.header.tempos || [{ bpm: 120, ticks: 0 }], ppq) : 0,
             method: 'firstMusicalBar',
             barNumber: barNumber + 1, // Human-readable bar number (1-based)
             firstEventTicks: firstEventTicks
         };
     }
 
+    /**
+     * Aligns MIDI file timing to start at the first musical bar and end on a downbeat
+     * This ensures proper score following and eliminates empty space at the beginning
+     * @param {Object} midi - MIDI file object to align
+     * @returns {Object} Aligned MIDI file object
+     */
     alignMidiToFirstMusicalBar(midi) {
         const firstBarInfo = this.detectFirstBarWithMusic(midi);
         
@@ -638,7 +725,7 @@ class Transport {
             }
         }
         
-        // Store alignment info
+        // Store alignment info in MIDI object
         midi._startPaddingTicks = startPaddingTicks;
         midi._startOffsetTicks = startOffsetTicks;
         midi._endPaddingTicks = needsEndPadding ? endPaddingTicks : 0;
@@ -653,7 +740,13 @@ class Transport {
         return midi;
     }
 
-    // Add a helper method for tick-to-seconds conversion if needed
+    /**
+     * Helper method for converting MIDI ticks to seconds based on tempo changes
+     * @param {number} ticks - Number of ticks to convert
+     * @param {Array} tempos - Array of tempo change events
+     * @param {number} ppq - Pulses per quarter note
+     * @returns {number} Time in seconds
+     */
     ticksToSeconds(ticks, tempos, ppq) {
         if (!tempos || tempos.length === 0) {
             // Default tempo if none provided
@@ -683,17 +776,19 @@ class Transport {
         return seconds;
     }
 
-    // Update your scheduleMIDIEvents method
+    /**
+     * Schedules all MIDI events for playback using Tone.js Parts
+     * Handles note transformations, tempo changes, and both forward/reverse playback
+     * @param {Object} midi - MIDI file object to schedule
+     */
     scheduleMIDIEvents(midi) {
-        // console.log('Scheduling MIDI events:', midi);
-        
-        // Align MIDI to start at first beat of first musical bar
+        // Align MIDI to start at first beat of first musical bar for better score sync
         this.originalMidi = this.alignMidiToFirstMusicalBar(midi);
         
-        // Now first musical bar always starts at tick 0
+        // Store alignment info for score following
         this.firstMusicalBar = { ticks: 0, time: 0, method: 'aligned' };
         
-        // Store info for score following
+        // Notify score manager of the alignment
         if (this.app.modules.scoreManager) {
             this.app.modules.scoreManager.setFirstMusicalBar(this.firstMusicalBar);
         }
@@ -702,9 +797,9 @@ class Transport {
         this.parts.forEach(part => part.dispose());
         this.parts = [];
 
-        // RESET Transport completely
+        // RESET Transport completely to ensure clean state
         Tone.Transport.stop();
-        Tone.Transport.cancel(); // Cancel all scheduled events
+        Tone.Transport.cancel();
         Tone.Transport.position = 0;
         Tone.Transport.seconds = 0;
         
@@ -876,7 +971,7 @@ class Transport {
                     
                     // Apply pitch bend transformation based on mode
                     const state = this.app.state;
-                    if (state.mode !== 0) { // If not in normal mode (negative harmony or left hand piano)
+                    if (state.mode !== 0) { // If not in normal mode
                         const normal = this.app.normal;
                         const factor = (!normal) ? -1 : 1;
                         transformedValue = originalValue * factor;
@@ -986,6 +1081,11 @@ class Transport {
         });
     }
 
+    /**
+     * Updates program change for a specific MIDI channel
+     * @param {number} channel - MIDI channel number
+     * @param {number} programNumber - New program number (instrument)
+     */
     setProgramChange(channel, programNumber) {
         // Convert channel to number to ensure proper comparison
         const channelNum = parseInt(channel);
@@ -1009,6 +1109,12 @@ class Transport {
         }
     }
 
+    /**
+     * Updates control change values for a specific MIDI channel
+     * @param {number} channel - MIDI channel number  
+     * @param {number} number - Control change number (CC#)
+     * @param {number} value - New control value
+     */
     setControlChange(channel, number, value) {
         
         // Convert channel to number to ensure proper comparison
@@ -1034,6 +1140,10 @@ class Transport {
         }
     }
 
+    /**
+     * Restores original MIDI values for a channel (used when resetting settings)
+     * @param {number} channel - MIDI channel number to restore
+     */
     restoreOriginalValuesForChannel(channel) {
         const channelNum = parseInt(channel);
         const part = this.parts.find(p => p.channel === channelNum);
@@ -1053,6 +1163,10 @@ class Transport {
         }
     }
 
+    /**
+     * Updates all scheduled MIDI events to reflect current transformation settings
+     * Used when harmony mode, root note, or other settings change
+     */
     updateChannels() {        
         try {
             this.parts.forEach(part => {
@@ -1060,17 +1174,13 @@ class Transport {
                 // console.log("Updating part:", part, "with channel:", part.channel);
                 if (part._events) {
                     part._events.forEach(event => {
-                        // Update notes
-                        // Check if this is a note event and not channel 9 (drums)
+                        // Update note transformations based on current settings
                         if (event.value && event.value.type === 'note' && event.value.channel !== 9) {
-                            // console.log("Updating channel:", event.value.channel, "original note:", event.value.midi);
-                            // Transform the note using the current app settings
                             const transformedNote = this.app.transformNote(event.value.originalMidi, part.channel);
                             event.value.midi = transformedNote;
-                            // console.log("Transformed to:", event.value.midi);
                         }
                         
-                        // Update pitch bend events
+                        // Update pitch bend transformations
                         if (event.value && event.value.type === 'pitchBend') {
                             const state = this.app.state;
                             let transformedValue = event.value.originalValue;
@@ -1090,6 +1200,7 @@ class Transport {
                 }
             });
             
+            // Update score if visible
             const scoreFollower = this.app.modules.scoreManager;
             if (scoreFollower && scoreFollower.scoreShown) {
                 const updatedMidi = this.createCurrentMidi();
@@ -1102,6 +1213,9 @@ class Transport {
         }
     }
 
+    /**
+     * Cleans up transport resources and stops playback
+     */
     cleanup() {
         if (this.playing) {
             this.stopPlayback(document.getElementById('playMidi'));
@@ -1111,8 +1225,11 @@ class Transport {
         this.parts = [];
     }
 
-    downloadCurrentMidi () {
-
+    /**
+     * Downloads the currently transformed MIDI file
+     * Applies all current settings (harmony mode, speed, etc.) to the export
+     */
+    downloadCurrentMidi() {
         const midi = this.createCurrentMidi();
         const name = this.originalMidi.header.name + "_negative_harmony.mid" || "negative_harmony.mid";
         if (!midi) {
@@ -1120,7 +1237,7 @@ class Transport {
             return;
         }
 
-        // console.log('Exporting MIDI file...');
+        // Create download link and trigger download
         const arrayBuffer = midi.toArray();
         const blob = new Blob([arrayBuffer], { type: 'audio/midi' });
         const url = URL.createObjectURL(blob);
@@ -1131,10 +1248,13 @@ class Transport {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        
-        // console.log('MIDI file exported successfully');
     }
 
+    /**
+     * Creates a new MIDI file with all current transformations applied
+     * Handles note transformations, speed changes, reversed playback, and validation
+     * @returns {Object|null} Transformed MIDI object or null if creation fails
+     */
     createCurrentMidi() {
         try {
             if (!this.originalMidi) {
@@ -1148,7 +1268,7 @@ class Transport {
                 return null;
             }
 
-            // Create a new empty MIDI file
+            // Create new MIDI file with transformations
             const midi = new Midi();
             
             const state = this.app.state;
@@ -1163,19 +1283,19 @@ class Transport {
                 midi.header = { ppq: 96 }; // Fallback header
             }
 
-            // Get and validate total ticks
+            // Get and validate total ticks for bounds checking
             const totalTicks = this.originalMidi.durationTicks;
             if (!totalTicks || totalTicks <= 0 || !isFinite(totalTicks)) {
                 console.error('Invalid total ticks:', totalTicks);
                 return null;
             }
 
-            // Validate and update header tempos
+            // Update tempo based on speed factor
             if (speedFactor !== 1.0 && midi.header.tempos && Array.isArray(midi.header.tempos)) {
                 midi.header.tempos.forEach(tempo => {
                     if (tempo && typeof tempo.bpm === 'number' && isFinite(tempo.bpm)) {
                         tempo.bpm = parseFloat((this.app.bpm * speedFactor).toFixed(2));
-                        // Clamp BPM to reasonable range
+                        // Clamp BPM to reasonable range to prevent invalid MIDI
                         tempo.bpm = Math.max(20, Math.min(300, tempo.bpm));
                     }
                     if (tempo && typeof tempo.ticks === 'number') {
@@ -1184,7 +1304,7 @@ class Transport {
                 });
             }
 
-            // Limit the number of tracks and events to prevent memory issues
+            // Set limits to prevent memory issues with large files
             const MAX_TRACKS = 16;
             const MAX_NOTES_PER_TRACK = 10000;
             const MAX_TOTAL_EVENTS = 50000;
@@ -1194,6 +1314,7 @@ class Transport {
             
             const tracksToProcess = this.originalMidi.tracks.slice(0, MAX_TRACKS);
             
+            // Process each track with comprehensive validation
             tracksToProcess.forEach((originalTrack, trackIndex) => {
                 if (!originalTrack || typeof originalTrack !== 'object') {
                     console.warn(`Skipping invalid track ${trackIndex}`);
@@ -1202,59 +1323,66 @@ class Transport {
 
                 const channel = originalTrack.channel;
                 
-                // Validate channel
+                // Validate channel number
                 if (typeof channel !== 'number' || channel < 0 || channel > 15) {
                     console.warn(`Skipping track ${trackIndex} with invalid channel:`, channel);
                     return;
                 }
                 
-                // Skip empty tracks or if we've hit the event limit
+                // Skip empty tracks or if event limit exceeded
                 if (!originalTrack.notes || !Array.isArray(originalTrack.notes) || 
                     originalTrack.notes.length === 0 || totalEvents >= MAX_TOTAL_EVENTS) {
                     return;
                 }
                 
-                // Limit notes per track
+                // Limit notes per track to prevent excessive memory usage
                 const notesToProcess = originalTrack.notes.slice(0, MAX_NOTES_PER_TRACK);
                 
-                // Create a new track
+                // Create new track with validation
                 const track = midi.addTrack();
                 track.name = (typeof originalTrack.name === 'string') ? 
-                    originalTrack.name.substring(0, 100) : `Track ${trackIndex}`; // Limit name length
+                    originalTrack.name.substring(0, 100) : `Track ${trackIndex}`;
                 track.channel = channel;
                 
                 let validNotesCount = 0;
                 
-                // Add notes with strict validation and limits
+                // Process notes with comprehensive validation and transformation
                 notesToProcess.forEach((note, noteIndex) => {
                     if (totalEvents >= MAX_TOTAL_EVENTS) return;
                     
-                    // Comprehensive note validation
+                    // Validate note structure
                     if (!note || typeof note !== 'object') {
                         console.warn(`Skipping invalid note ${noteIndex} in track ${trackIndex}`);
                         return;
                     }
                     
-                    if (typeof note.midi !== 'number' || !isFinite(note.midi) || note.midi < 0 || note.midi > 127) {
+                    // Validate MIDI note number
+                    if (typeof note.midi !== 'number' || !isFinite(note.midi) || 
+                        note.midi < 0 || note.midi > 127) {
                         console.warn(`Skipping note with invalid MIDI value:`, note.midi);
                         return;
                     }
                     
-                    if (typeof note.ticks !== 'number' || !isFinite(note.ticks) || note.ticks < 0 || note.ticks > totalTicks) {
-                        console.warn(`Skipping note with invalid ticks:`, note.ticks, 'totalTicks:', totalTicks);
+                    // Validate timing
+                    if (typeof note.ticks !== 'number' || !isFinite(note.ticks) || 
+                        note.ticks < 0 || note.ticks > totalTicks) {
+                        console.warn(`Skipping note with invalid ticks:`, note.ticks);
                         return;
                     }
                     
-                    if (typeof note.durationTicks !== 'number' || !isFinite(note.durationTicks) || note.durationTicks <= 0) {
+                    // Validate duration
+                    if (typeof note.durationTicks !== 'number' || !isFinite(note.durationTicks) || 
+                        note.durationTicks <= 0) {
                         console.warn(`Note has invalid duration, using default:`, note.durationTicks);
                         note.durationTicks = Math.min(96, totalTicks / 32); // Safe default
                     }
 
+                    // Apply note transformation (skip for drums on channel 9)
                     let transformedMidi = note.midi;
-                    if (channel !== 9) { // Skip drums channel
+                    if (channel !== 9) {
                         try {
                             transformedMidi = this.app.transformNote(note.midi, channel);
-                            // Validate transformed note
+                            // Validate transformed result
                             if (!isFinite(transformedMidi) || transformedMidi < 0 || transformedMidi > 127) {
                                 console.warn('Transform produced invalid note, clamping:', transformedMidi);
                                 transformedMidi = Math.max(0, Math.min(127, Math.round(transformedMidi)));
@@ -1265,11 +1393,12 @@ class Transport {
                         }
                     }
                     
+                    // Calculate final timing (handle reversed playback)
                     let finalTicks = note.ticks;
                     let finalDurationTicks = Math.min(note.durationTicks, totalTicks - finalTicks);
                     
                     if (isReversed && note.ticks !== 0) {
-                        // Safe reversed calculation
+                        // Calculate reversed timing safely
                         try {
                             const noteLength = (note.duration && note.duration <= Tone.Time("8n").toSeconds()) ? 
                                 note.ticks : (note.ticks + ((channel !== 9) ? note.durationTicks : 0));
@@ -1294,6 +1423,7 @@ class Transport {
                     // Ensure note doesn't extend beyond total duration
                     finalDurationTicks = Math.min(finalDurationTicks, totalTicks - finalTicks);
                     
+                    // Add note to track with final validation
                     try {
                         track.addNote({
                             midi: Math.round(transformedMidi),
@@ -1318,7 +1448,7 @@ class Transport {
                 if (validNotesCount > 0) {
                     validTracksCount++;
                     
-                    // Add control changes with validation and limits
+                    // Add control changes with validation
                     if (originalTrack.controlChanges && typeof originalTrack.controlChanges === 'object' && 
                         totalEvents < MAX_TOTAL_EVENTS) {
                         const ccEntries = Object.entries(originalTrack.controlChanges).slice(0, 10); // Limit CC types
@@ -1357,7 +1487,8 @@ class Transport {
                     
                     // Set instrument with validation
                     if (originalTrack.instrument && typeof originalTrack.instrument.number === 'number') {
-                        const programNumber = Math.max(0, Math.min(127, Math.round(originalTrack.instrument.number)));
+                        const programNumber = Math.max(0, Math.min(127, 
+                            Math.round(originalTrack.instrument.number)));
                         track.instrument = { number: programNumber };
                     }
                 } else {
@@ -1366,15 +1497,14 @@ class Transport {
                 }
             });
 
-            // Validate the final MIDI object
+            // Final validation and structure checks
             if (validTracksCount === 0 || !midi.tracks || midi.tracks.length === 0) {
                 console.error('No valid tracks created');
                 return null;
             }
 
-            // Ensure proper MIDI structure
+            // Ensure proper MIDI structure with safe defaults
             try {
-                // Set safe defaults for header if missing
                 if (!midi.header.ppq || midi.header.ppq <= 0) {
                     midi.header.ppq = 96;
                 }
@@ -1390,21 +1520,21 @@ class Transport {
                 console.error('Error setting MIDI header defaults:', error);
             }
 
-            // Final validation of the MIDI structure with memory check
+            // Final validation and size checks
             try {
                 // Force garbage collection if available
                 if (window.gc) {
                     window.gc();
                 }
                 
-                // Test if the MIDI can be serialized without errors
+                // Test serialization to catch errors early
                 const testArray = midi.toArray();
                 if (!testArray || testArray.length === 0) {
                     console.error('Generated MIDI produces empty array');
                     return null;
                 }
                 
-                // Check if the generated MIDI is too large
+                // Check file size to prevent memory issues
                 const maxSize = 5 * 1024 * 1024; // 5MB limit
                 if (testArray.length > maxSize) {
                     console.error('Generated MIDI is too large:', testArray.length, 'bytes');
@@ -1416,7 +1546,6 @@ class Transport {
                 return null;
             }
 
-            // console.log(`Successfully created MIDI with ${validTracksCount} valid tracks and ${totalEvents} total events`);
             return midi;
 
         } catch (error) {

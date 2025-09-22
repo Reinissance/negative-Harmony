@@ -1,27 +1,64 @@
+/**
+ * Score Manager Module
+ * Handles musical score generation from MIDI files using ABC notation,
+ * dynamic loading of required modules, and real-time score following during playback
+ */
+
+/**
+ * Manages musical score display, ABC notation generation, and score following functionality
+ * @class ScoreManager
+ */
 class ScoreManager {
+    /**
+     * Creates an instance of ScoreManager
+     * @param {Object} app - Reference to the main application instance
+     */
     constructor (app) {
         this.app = app;
+        /** @type {string} Generated ABC notation string */
         this.abcString = '';
+        /** @type {boolean} Whether the midi2abc WASM module is ready */
         this.midi2abcReady = false;
+        /** @type {Object} Reference to the midi2abc WASM module */
         this.midi2abc = null;
+        /** @type {Object} Reference to the ABCJS library for rendering */
         this.abcjs = null;
+        /** @type {boolean} Whether required modules have been loaded */
         this.modulesLoaded = false;
-        this.currentBarStart = 0; // Track current bar position for score following
+        /** @type {number} Current starting bar for score following (0-based) */
+        this.currentBarStart = 0;
+        /** @type {boolean} Whether score following is currently active */
         this.scoreFollowerActive = false;
+        /** @type {boolean} Whether the score is currently visible */
         this.scoreShown = false;
+        /** @type {boolean} Whether score generation is available */
         this.scoreAvailable = true;
-        this.lastPolledBar = null; // To avoid redundant updates
-        this.abcOutput = ""; // Store output from WASM module
-        this.currentKeySignature = 'C'; // Track current key signature
+        /** @type {number|null} Last polled bar to avoid redundant updates */
+        this.lastPolledBar = null;
+        /** @type {string} Output captured from WASM module */
+        this.abcOutput = "";
+        /** @type {string} Current key signature for score processing */
+        this.currentKeySignature = 'C';
+        /** @type {number|null} Timeout ID for debounced updates */
         this.updateTimeout = null;
-        this.totalBars = 0; // Total number of bars in the score
+        /** @type {number} Total number of bars in the current score */
+        this.totalBars = 0;
     }
 
+    /**
+     * Initialize the score manager and load required modules
+     * @async
+     */
     async init() {
         // Load required modules first
         await this.loadModules();
     }
 
+    /**
+     * Dynamically loads required modules (midi2abc WASM and ABCJS library)
+     * Similar to SettingsManager's loadModule pattern - loads on demand for better performance
+     * @returns {Promise<void>} Resolves when all modules are loaded
+     */
     loadModules() {
         return new Promise((resolve, reject) => {
             if (this.modulesLoaded) {
@@ -80,7 +117,7 @@ class ScoreManager {
                     if (loadedCount === totalModules) {
                         this.modulesLoaded = true;
                         this.abcjs = window.ABCJS;
-                        resolve();
+                        resolve(); // Don't reject - continue without failed modules
                     }
                 };
                 
@@ -89,6 +126,10 @@ class ScoreManager {
         });
     }
 
+    /**
+     * Initializes the midi2abc WASM module for MIDI to ABC conversion
+     * @returns {Promise<void>} Resolves when WASM module is ready
+     */
     initializeMidi2abc() {
         return new Promise((resolve, reject) => {
             if (!window.midi2abcModule) {
@@ -99,18 +140,16 @@ class ScoreManager {
             // Initialize output variable at class level
             this.abcOutput = "";
 
-            // Instantiate midi2abc WASM module
+            // Instantiate midi2abc WASM module with output handlers
             window.midi2abcModule({
                 print: (text) => {
                     this.abcOutput += text + "\n";
-                    // console.log('WASM output:', text);
                 },
                 printErr: (text) => {
                     console.error('WASM error:', text);
                 },
                 onRuntimeInitialized: () => {
                     this.midi2abcReady = true;
-                    // console.log('midi2abc WASM module initialized');
                     resolve();
                 }
             }).then((Module) => {
@@ -122,6 +161,12 @@ class ScoreManager {
         });
     }
 
+    /**
+     * Generates ABC notation string from a MIDI file using the WASM converter
+     * @async
+     * @param {Object} midiFile - MIDI file object to convert
+     * @returns {Promise<string>} Generated ABC notation string
+     */
     async generateABCStringfromMIDI(midiFile) {
         if (!this.midi2abcReady || !this.midi2abc || !this.midi2abc.FS) {
             console.error('midi2abc WASM module not ready');
@@ -130,7 +175,6 @@ class ScoreManager {
         }
 
         try {
-
             this.abcString = "";
             // Convert the Midi object to array buffer
             const midiArrayBuffer = midiFile.toArray();
@@ -152,7 +196,7 @@ class ScoreManager {
             // Verify file was written correctly
             const writtenData = this.midi2abc.FS.readFile('/input.mid');
             
-            // Call midi2abc conversion with -b flag to limit to 4 bars
+            // Call midi2abc conversion with optimized flags for score display
             const result = this.midi2abc.callMain(['input.mid', '-sr', '4', '-bpl', '4', '-ga']);
 
             // Get the output (this should be captured by the print function)
@@ -164,10 +208,10 @@ class ScoreManager {
                 return '';
             }
             
-            // Clean up the output - remove everything before the first X:
+            // Clean up the output - remove everything before the first X: header
             abcOutput = abcOutput.replace(/^[\s\S]*?(?=^X:)/m, '');
 
-            // Store the result
+            // Store the result and calculate total bars
             this.abcString = abcOutput;
             this.totalBars = this.getTotalBarsFromABC();
             return abcOutput;
@@ -180,6 +224,11 @@ class ScoreManager {
         }
     }
 
+    /**
+     * Calculates the total number of bars in an ABC notation string
+     * @param {string|null} abcString - ABC notation string (uses stored string if null)
+     * @returns {number} Total number of bars detected
+     */
     getTotalBarsFromABC(abcString = null) {
         const abc = abcString || this.abcString;
         if (!abc || !abc.trim()) {
@@ -187,10 +236,11 @@ class ScoreManager {
             return 0;
         }
 
-        // Split into lines and group by voices
+        // Split into lines and group by voices for multi-voice handling
         const lines = abc.split('\n');
         let voices = {};
         let currentVoice = 'default';
+        
         for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed.startsWith('V:')) {
@@ -199,7 +249,7 @@ class ScoreManager {
                 currentVoice = match ? match[1] : 'default';
                 if (!voices[currentVoice]) voices[currentVoice] = [];
             } else if (!/^(X:|T:|M:|L:|K:|Q:|%|%%)/.test(trimmed) && trimmed.length > 0) {
-                // Music line
+                // Music line (not header or comment)
                 if (!voices[currentVoice]) voices[currentVoice] = [];
                 voices[currentVoice].push(trimmed);
             }
@@ -215,21 +265,24 @@ class ScoreManager {
         return maxBars;
     }
 
+    /**
+     * Displays an error modal when ABC generation fails
+     * @param {string} errorMessage - Error message to display
+     */
     showAbcErrorNotification(errorMessage) {
-        
         // Hide score container if it's showing
         const scoreContainer = document.getElementById('scoreContainer');
         if (scoreContainer) {
             scoreContainer.style.display = 'none';
         }
 
-        // fold all accordion sections
+        // Fold all accordion sections for cleaner UI
         const accordions = document.querySelectorAll('.accordion-collapse.show');
         accordions.forEach(accordion => {
             accordion.classList.remove('show');
         });
 
-        // Also update the button states to reflect collapsed state
+        // Update accordion button states to reflect collapsed state
         const accordionButtons = document.querySelectorAll('.accordion-button:not(.collapsed)');
         accordionButtons.forEach(button => {
             button.classList.add('collapsed');
@@ -242,10 +295,10 @@ class ScoreManager {
             existingModal.remove();
         }
 
-        // Check if using local file
+        // Check if using local file to determine appropriate recovery options
         const isLocalFile = this.app.localFile === true;
 
-        // Create modal HTML
+        // Create modal HTML with conditional button options
         const modal = document.createElement('div');
         modal.id = 'abcErrorModal';
         modal.style.cssText = `
@@ -366,14 +419,16 @@ class ScoreManager {
         });
     }
 
-    // Add method to reload page with current settings
+    /**
+     * Reloads the page while preserving current settings via URL parameters
+     */
     reloadPageWithSettings() {
         try {
             // Get current settings from settingsManager
             if (this.app.modules.settingsManager && this.app.modules.settingsManager.share) {
                 const shareUrl = this.app.modules.settingsManager.share();
                 if (shareUrl) {
-                    // Reload the page
+                    // Reload the page with settings preserved
                     window.location = shareUrl;
                 }
             } else {
@@ -387,7 +442,9 @@ class ScoreManager {
         }
     }
 
-    // Add method to dismiss the error notification
+    /**
+     * Dismisses the error notification and disables score functionality
+     */
     dismissAbcErrorNotification() {
         // Hide show score button since score won't be available
         const showScoreBtn = document.getElementById("showScore");
@@ -402,7 +459,11 @@ class ScoreManager {
         }
     }
 
-    // New method to detect if a voice is percussion
+    /**
+     * Detects if a voice represents percussion/drum parts
+     * @param {string[]} voiceLines - Array of voice lines to analyze
+     * @returns {boolean} True if voice is percussion
+     */
     isPercussionVoice(voiceLines) {
         return voiceLines.some(line => {
             const trimmed = line.trim();
@@ -410,10 +471,14 @@ class ScoreManager {
         });
     }
 
-    // New method to get key signature sharps/flats
+    /**
+     * Gets the sharps and flats for a given key signature
+     * @param {string} keySignature - Key signature (e.g., 'C', 'G', 'Bb', 'F#m')
+     * @returns {Object} Object with sharps and flats arrays
+     */
     getKeySignatureAccidentals(keySignature) {
         const keySignatures = {
-            // Major keys
+            // Major keys with sharps
             'C': { sharps: [], flats: [] },
             'G': { sharps: ['F'], flats: [] },
             'D': { sharps: ['F', 'C'], flats: [] },
@@ -423,6 +488,7 @@ class ScoreManager {
             'F#': { sharps: ['F', 'C', 'G', 'D', 'A', 'E'], flats: [] },
             'C#': { sharps: ['F', 'C', 'G', 'D', 'A', 'E', 'B'], flats: [] },
             
+            // Major keys with flats
             'F': { sharps: [], flats: ['B'] },
             'Bb': { sharps: [], flats: ['B', 'E'] },
             'Eb': { sharps: [], flats: ['B', 'E', 'A'] },
@@ -452,224 +518,239 @@ class ScoreManager {
         return keySignatures[keySignature] || { sharps: [], flats: [] };
     }
 
-    // Updated normalizeNoteForDrums to accept key signature parameter
-normalizeNoteForDrums(noteString, keySignature = 'C') {
-    if (!noteString || !keySignature) {
-        return noteString;
-    }
+    /**
+     * Normalizes a note string for drum notation based on key signature
+     * @param {string} noteString - ABC note string to normalize
+     * @param {string} keySignature - Current key signature
+     * @returns {string} Normalized note string
+     */
+    normalizeNoteForDrums(noteString, keySignature = 'C') {
+        if (!noteString || !keySignature) {
+            return noteString;
+        }
 
-    const accidentals = this.getKeySignatureAccidentals(keySignature);
-    
-    // Extract note components using regex
-    const noteMatch = noteString.match(/^(\^*|_*|=*)([A-Ga-g])([#b]*)([',]*)/);
-    if (!noteMatch) {
-        return noteString;
-    }
-
-    const [, explicitAccidental, noteLetter, explicitSymbols, octaveMarkers] = noteMatch;
-    const baseNote = noteLetter.toUpperCase();
-    
-    // If there's already an explicit accidental (^, _, or =), use the note as-is
-    if (explicitAccidental || explicitSymbols) {
-        // console.log(`Note ${noteString} has explicit accidental, using as-is`);
-        return noteString;
-    }
-    
-    let normalizedNote = noteLetter;
-    
-    // Apply key signature effects
-    // If the note is in the sharp list of the key signature, it should be treated as sharp
-    if (accidentals.sharps.includes(baseNote)) {
-        normalizedNote = '^' + noteLetter;
-        // console.log(`Note ${baseNote} is sharp in key ${keySignature}, treating as ${normalizedNote}`);
-    }
-    // If the note is in the flat list of the key signature, it should be treated as flat
-    else if (accidentals.flats.includes(baseNote)) {
-        normalizedNote = '_' + noteLetter;
-        // console.log(`Note ${baseNote} is flat in key ${keySignature}, treating as ${normalizedNote}`);
-    }
-    
-    // Reconstruct the full note with octave markers
-    const result = normalizedNote + octaveMarkers;
-    
-    // console.log(`Normalized ${noteString} (key: ${keySignature}) -> ${result}`);
-    return result;
-}
-
-// Updated transposeDrumNotes to preserve ALL non-note characters in their exact positions
-transposeDrumNotes(line, keySignature = 'C') {
-    try {
-        // console.log('Input line for drum transposition:', line);
-        // console.log('Using key signature for drums:', keySignature);
+        const accidentals = this.getKeySignatureAccidentals(keySignature);
         
-        // First, clean up any existing style markers to avoid conflicts, but preserve everything else
-        let cleanLine = line.replace(/[+ox](?=[A-Ga-g])/g, ''); // Only remove style markers directly before notes
-        // console.log('After cleanup (should be identical unless style markers removed):', cleanLine);
+        // Extract note components using regex
+        const noteMatch = noteString.match(/^(\^*|_*|=*)([A-Ga-g])([#b]*)([',]*)/);
+        if (!noteMatch) {
+            return noteString;
+        }
+
+        const [, explicitAccidental, noteLetter, explicitSymbols, octaveMarkers] = noteMatch;
+        const baseNote = noteLetter.toUpperCase();
         
-        // GM Drum Kit MIDI note mapping to ABC percussion notation
-        const gmDrumMapping = {
-            // MIDI 35 (Bass Drum 2) - B0
-            'B,,,': 'C',      // Bass drum -> C line
-            '=B,,,': 'C',     // Natural B -> C line
-            
-            // MIDI 36 (Bass Drum 1) - C1
-            'C,,': 'F',       // Bass drum -> F line
-            '=C,,': 'F',      // Natural C -> F line
-            
-            // MIDI 40 (Snare Drum 2) - E1
-            'E,,': 'B',      // Snare -> B line with open notehead
-            '=E,,': 'B',     // Natural E -> B line
-            
-            // MIDI 42 (Closed Hi-hat) - F#1
-            '^F,,': 'ng',     // Hi-hat -> g line with cross notehead
-            '=F,,': 'ng',     // Natural F -> g line (shouldn't happen for hi-hat but kept for safety)
-            
-            // MIDI 46 (Open Hi-hat) - F#2 
-            '^F,': 'ng',      // Open Hi-hat -> g line with cross notehead
-            
-            // MIDI 38 (Snare Drum 1) - D1
-            'D,,': 'D',       // MIDI 38 - Snare Drum 1
-            '=D,,': 'D',      // Natural D
-            
-            // MIDI 37 (Side Stick) - C#1
-            '^C,,': 'oD',     // MIDI 37 - Side Stick  
-            
-            // MIDI 39 (Hand Clap) - D#1
-            '^D,,': '^D',     // MIDI 39 - Hand Clap
-            
-            // MIDI 41 (Low Tom 2) - F1
-            'F,,': 'A',       // MIDI 41 - Low Tom 2
-            '=F,,': 'A',      // Natural F
-            
-            // MIDI 43 (Low Tom 1) - G#1
-            '^G,,': 'A',     // MIDI 43 - Low Tom 1
-            'G,,': 'A',      // Natural G (for flat keys where G# might appear as Ab)
-            
-            // MIDI 45 (Mid Tom 2) - A1
-            'A,,': 'c',      // MIDI 45 - Mid Tom 2
-            '=A,,': 'c',     // Natural A
-            
-            // MIDI 47 (Mid Tom 1) - B1
-            'B,,': 'c',       // MIDI 47 - Mid Tom 1
-            '=B,,': 'c',      // Natural B
-            
-            // MIDI 48 (High Tom 2) - C2
-            'C,': 'ne',       // MIDI 48 - High Tom 2
-            '=C,': 'ne',      // Natural C
-            
-            // MIDI 50 (High Tom 1) - D2
-            'D,': 'ne',        // MIDI 50 - High Tom 1
-            '=D,': 'ne',       // Natural D
-            
-            // MIDI 51 (Ride Cymbal 1) - D#2
-            '^D,': 'na',       // MIDI 51 - Ride Cymbal 1
-            
-            // MIDI 49 (Crash Cymbal 1) - C#2
-            '^C,': 'nb',      // Crash cymbal -> b line with plus notehead
-            'C,': 'nb',       // Natural C -> b line (for enharmonic equivalents)
-            
-            // MIDI 52 (Chinese Cymbal) - E2
-            'E,': 'ob',       // MIDI 52 - Chinese Cymbal
-            '=E,': 'ob',      // Natural E
-            
-            // MIDI 53 (Ride Bell) - F2
-            'F,': 'nb',       // MIDI 53 - Ride Bell
-            '=F,': 'nb',      // Natural F
-            
-            // MIDI 54 (Tambourine) - F#2
-            '^F,': 'oc',      // MIDI 54 - Tambourine
-            
-            // MIDI 55 (Splash Cymbal) - G2
-            'G,': 'nc',       // MIDI 55 - Splash Cymbal
-            '=G,': 'nc',      // Natural G
-            
-            // MIDI 56 (Cowbell) - G#2
-            '^G,': 'od',      // MIDI 56 - Cowbell
-            'G,': 'od',       // Natural G (for enharmonic)
-            
-            // MIDI 57 (Crash Cymbal 2) - A2
-            'A,': 'nd',       // MIDI 57 - Crash Cymbal 2
-            '=A,': 'nd',      // Natural A
-            
-            // MIDI 58 (Vibra Slap) - A#2
-            '^A,': 'ne',      // MIDI 58 - Vibra Slap
-            'A,': 'ne',       // Natural A (for enharmonic)
-            
-            // MIDI 59 (Ride Cymbal 2) - B2
-            'B,': 'oa',       // MIDI 59 - Ride Cymbal 2
-            '=B,': 'oa',      // Natural B
-            
-            // Higher octave mappings
-            'C': 'nf',        // MIDI 60+ 
-            '=C': 'nf',       // Natural C
-            'D': 'ng',        
-            '=D': 'ng',       // Natural D
-            'E': 'na',        
-            '=E': 'na',       // Natural E
-            'F': 'nb',        
-            '=F': 'nb',       // Natural F
-            'G': 'nc',        
-            '=G': 'nc',       // Natural G
-            'A': 'nd',        
-            '=A': 'nd',       // Natural A
-            'B': 'ne',        
-            '=B': 'ne'        // Natural B
-        };
+        // If there's already an explicit accidental (^, _, or =), use the note as-is
+        if (explicitAccidental || explicitSymbols) {
+            // console.log(`Note ${noteString} has explicit accidental, using as-is`);
+            return noteString;
+        }
         
-        // Replace ONLY note patterns with percussion symbols, preserving ALL other characters
-        // This regex will match notes but the replacement function will preserve everything else
-        let processedLine = cleanLine.replace(/(\^*|_*|=*)([A-Ga-g])([#b]*)([',]*)/g, (match, accidental, note, symbols, octaveModifier) => {
-            const originalNote = match;
-            
-            // First normalize the note to apply key signature effects
-            const normalizedNote = this.normalizeNoteForDrums(originalNote, keySignature);
+        let normalizedNote = noteLetter;
+        
+        // Apply key signature effects
+        // If the note is in the sharp list of the key signature, it should be treated as sharp
+        if (accidentals.sharps.includes(baseNote)) {
+            normalizedNote = '^' + noteLetter;
+            // console.log(`Note ${baseNote} is sharp in key ${keySignature}, treating as ${normalizedNote}`);
+        }
+        // If the note is in the flat list of the key signature, it should be treated as flat
+        else if (accidentals.flats.includes(baseNote)) {
+            normalizedNote = '_' + noteLetter;
+            // console.log(`Note ${baseNote} is flat in key ${keySignature}, treating as ${normalizedNote}`);
+        }
+        
+        // Reconstruct the full note with octave markers
+        const result = normalizedNote + octaveMarkers;
+        
+        // console.log(`Normalized ${noteString} (key: ${keySignature}) -> ${result}`);
+        return result;
+    }
 
-            // console.log(`Processing: ${originalNote} -> normalized: ${normalizedNote}`);
-
-            // Check our GM drum mapping table
-            if (gmDrumMapping[normalizedNote]) {
-                // console.log(`Mapped ${normalizedNote} to ${gmDrumMapping[normalizedNote]}`);
-                return gmDrumMapping[normalizedNote];
-            }
+    /**
+     * Transposes drum notes from standard notation to percussion symbols
+     * Maps MIDI drum notes to ABC percussion notation while preserving all formatting
+     * @param {string} line - Line of ABC notation to process
+     * @param {string} keySignature - Current key signature for accidental handling
+     * @returns {string} Line with drum notes converted to percussion symbols
+     */
+    transposeDrumNotes(line, keySignature = 'C') {
+        try {
+            // console.log('Input line for drum transposition:', line);
+            // console.log('Using key signature for drums:', keySignature);
             
-            // Also try the original note in case normalization wasn't needed
-            if (gmDrumMapping[originalNote]) {
-                // console.log(`Mapped ${originalNote} to ${gmDrumMapping[originalNote]}`);
-                return gmDrumMapping[originalNote];
-            }
+            // First, clean up any existing style markers to avoid conflicts, but preserve everything else
+            let cleanLine = line.replace(/[+ox](?=[A-Ga-g])/g, ''); // Only remove style markers directly before notes
+            // console.log('After cleanup (should be identical unless style markers removed):', cleanLine);
             
-            // Log unmapped notes for debugging
-            // console.log(`No mapping found for: ${originalNote} (normalized: ${normalizedNote}), using default`);
+            // GM Drum Kit MIDI note mapping to ABC percussion notation
+            const gmDrumMapping = {
+                // MIDI 35 (Bass Drum 2) - B0
+                'B,,,': 'C',      // Bass drum -> C line
+                '=B,,,': 'C',     // Natural B -> C line
+                
+                // MIDI 36 (Bass Drum 1) - C1
+                'C,,': 'F',       // Bass drum -> F line
+                '=C,,': 'F',      // Natural C -> F line
+                
+                // MIDI 40 (Snare Drum 2) - E1
+                'E,,': 'B',      // Snare -> B line with open notehead
+                '=E,,': 'B',     // Natural E -> B line
+                
+                // MIDI 42 (Closed Hi-hat) - F#1
+                '^F,,': 'ng',     // Hi-hat -> g line with cross notehead
+                '=F,,': 'ng',     // Natural F -> g line (shouldn't happen for hi-hat but kept for safety)
+                
+                // MIDI 46 (Open Hi-hat) - F#2 
+                '^F,': 'ng',      // Open Hi-hat -> g line with cross notehead
+                
+                // MIDI 38 (Snare Drum 1) - D1
+                'D,,': 'D',       // MIDI 38 - Snare Drum 1
+                '=D,,': 'D',      // Natural D
+                
+                // MIDI 37 (Side Stick) - C#1
+                '^C,,': 'oD',     // MIDI 37 - Side Stick  
+                
+                // MIDI 39 (Hand Clap) - D#1
+                '^D,,': '^D',     // MIDI 39 - Hand Clap
+                
+                // MIDI 41 (Low Tom 2) - F1
+                'F,,': 'A',       // MIDI 41 - Low Tom 2
+                '=F,,': 'A',      // Natural F
+                
+                // MIDI 43 (Low Tom 1) - G#1
+                '^G,,': 'A',     // MIDI 43 - Low Tom 1
+                'G,,': 'A',      // Natural G (for flat keys where G# might appear as Ab)
+                
+                // MIDI 45 (Mid Tom 2) - A1
+                'A,,': 'c',      // MIDI 45 - Mid Tom 2
+                '=A,,': 'c',     // Natural A
+                
+                // MIDI 47 (Mid Tom 1) - B1
+                'B,,': 'c',       // MIDI 47 - Mid Tom 1
+                '=B,,': 'c',      // Natural B
+                
+                // MIDI 48 (High Tom 2) - C2
+                'C,': 'ne',       // MIDI 48 - High Tom 2
+                '=C,': 'ne',      // Natural C
+                
+                // MIDI 50 (High Tom 1) - D2
+                'D,': 'ne',        // MIDI 50 - High Tom 1
+                '=D,': 'ne',       // Natural D
+                
+                // MIDI 51 (Ride Cymbal 1) - D#2
+                '^D,': 'na',       // MIDI 51 - Ride Cymbal 1
+                
+                // MIDI 49 (Crash Cymbal 1) - C#2
+                '^C,': 'nb',      // Crash cymbal -> b line with plus notehead
+                'C,': 'nb',       // Natural C -> b line (for enharmonic equivalents)
+                
+                // MIDI 52 (Chinese Cymbal) - E2
+                'E,': 'ob',       // MIDI 52 - Chinese Cymbal
+                '=E,': 'ob',      // Natural E
+                
+                // MIDI 53 (Ride Bell) - F2
+                'F,': 'nb',       // MIDI 53 - Ride Bell
+                '=F,': 'nb',      // Natural F
+                
+                // MIDI 54 (Tambourine) - F#2
+                '^F,': 'oc',      // MIDI 54 - Tambourine
+                
+                // MIDI 55 (Splash Cymbal) - G2
+                'G,': 'nc',       // MIDI 55 - Splash Cymbal
+                '=G,': 'nc',      // Natural G
+                
+                // MIDI 56 (Cowbell) - G#2
+                '^G,': 'od',      // MIDI 56 - Cowbell
+                'G,': 'od',       // Natural G (for enharmonic)
+                
+                // MIDI 57 (Crash Cymbal 2) - A2
+                'A,': 'nd',       // MIDI 57 - Crash Cymbal 2
+                '=A,': 'nd',      // Natural A
+                
+                // MIDI 58 (Vibra Slap) - A#2
+                '^A,': 'ne',      // MIDI 58 - Vibra Slap
+                'A,': 'ne',       // Natural A (for enharmonic)
+                
+                // MIDI 59 (Ride Cymbal 2) - B2
+                'B,': 'oa',       // MIDI 59 - Ride Cymbal 2
+                '=B,': 'oa',      // Natural B
+                
+                // Higher octave mappings
+                'C': 'nf',        // MIDI 60+ 
+                '=C': 'nf',       // Natural C
+                'D': 'ng',        
+                '=D': 'ng',       // Natural D
+                'E': 'na',        
+                '=E': 'na',       // Natural E
+                'F': 'nb',        
+                '=F': 'nb',       // Natural F
+                'G': 'nc',        
+                '=G': 'nc',       // Natural G
+                'A': 'nd',        
+                '=A': 'nd',       // Natural A
+                'B': 'ne',        
+                '=B': 'ne'        // Natural B
+            };
+            
+            // Replace ONLY note patterns with percussion symbols, preserving ALL other characters
+            // This regex will match notes but the replacement function will preserve everything else
+            let processedLine = cleanLine.replace(/(\^*|_*|=*)([A-Ga-g])([#b]*)([',]*)/g, (match, accidental, note, symbols, octaveModifier) => {
+                const originalNote = match;
+                
+                // First normalize the note to apply key signature effects
+                const normalizedNote = this.normalizeNoteForDrums(originalNote, keySignature);
 
-            // Default mapping for unmapped notes based on register
-            if (octaveModifier.includes(',')) {
-                // Low register - likely drums
-                if (accidental.includes('^') || symbols.includes('#')) {
-                    const result = 'o' + note; // Cross notehead for accented drums
-                    // console.log(`Default low register mapping ${originalNote} to ${result}`);
-                    return result;
+                // console.log(`Processing: ${originalNote} -> normalized: ${normalizedNote}`);
+
+                // Check our GM drum mapping table
+                if (gmDrumMapping[normalizedNote]) {
+                    // console.log(`Mapped ${normalizedNote} to ${gmDrumMapping[normalizedNote]}`);
+                    return gmDrumMapping[normalizedNote];
+                }
+                
+                // Also try the original note in case normalization wasn't needed
+                if (gmDrumMapping[originalNote]) {
+                    // console.log(`Mapped ${originalNote} to ${gmDrumMapping[originalNote]}`);
+                    return gmDrumMapping[originalNote];
+                }
+                
+                // Log unmapped notes for debugging
+                // console.log(`No mapping found for: ${originalNote} (normalized: ${normalizedNote}), using default`);
+
+                // Default mapping for unmapped notes based on register
+                if (octaveModifier.includes(',')) {
+                    // Low register - likely drums
+                    if (accidental.includes('^') || symbols.includes('#')) {
+                        const result = 'o' + note; // Cross notehead for accented drums
+                        // console.log(`Default low register mapping ${originalNote} to ${result}`);
+                        return result;
+                    } else {
+                        const result = note; // Normal notehead for toms
+                        // console.log(`Default low register mapping ${originalNote} to ${result}`);
+                        return result;
+                    }
                 } else {
-                    const result = note; // Normal notehead for toms
-                    // console.log(`Default low register mapping ${originalNote} to ${result}`);
+                    // Higher register - likely cymbals/hi-hats
+                    const result = 'n' + note; // Cross notehead for cymbals
+                    // console.log(`Default high register mapping ${originalNote} to ${result}`);
                     return result;
                 }
-            } else {
-                // Higher register - likely cymbals/hi-hats
-                const result = 'n' + note; // Cross notehead for cymbals
-                // console.log(`Default high register mapping ${originalNote} to ${result}`);
-                return result;
-            }
-        });
+            });
 
-        // console.log('Processed line:', processedLine);
-        return processedLine;
-        
-    } catch (error) {
-        console.warn('Error transposing drum notes in line:', line, error);
-        return line; // Return original on error
+            // console.log('Processed line:', processedLine);
+            return processedLine;
+            
+        } catch (error) {
+            console.warn('Error transposing drum notes in line:', line, error);
+            return line; // Return original on error
+        }
     }
-}
-    
+
+    /**
+     * Renders the ABC notation as a musical score in the specified container
+     * @param {string} containerId - ID of the container element to render into
+     */
     renderScore(containerId = 'score') {
         if (!this.abcjs || !this.abcString.trim()) {
             console.warn('No ABC data or abcjs library to render');
@@ -781,6 +862,15 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
     
+    /**
+     * Extracts specific bars from a single voice while handling percussion conversion
+     * @param {string[]} voiceLines - Lines belonging to this voice
+     * @param {number} startBar - Starting bar number (0-based)
+     * @param {number} numBars - Number of bars to extract
+     * @param {boolean} isPercussion - Whether this voice is percussion
+     * @param {string} originalKeySignature - Original key signature for processing
+     * @returns {Object} Object with voiceHeader and bars array
+     */
     extractBarsFromVoice(voiceLines, startBar, numBars, isPercussion = false, originalKeySignature = 'C') {
         // console.log(voiceLines);
         let voiceHeader = '';
@@ -955,6 +1045,13 @@ transposeDrumNotes(line, keySignature = 'C') {
         };
     }
 
+    /**
+     * Extracts a specific range of bars from ABC notation for score following
+     * @param {string} abcString - Full ABC notation string
+     * @param {number} startBar - Starting bar number (0-based, default: 0)
+     * @param {number} numBars - Number of bars to extract (default: 4)
+     * @returns {string} ABC notation containing only the specified bars
+     */
     extractBarsFromABC(abcString, startBar = 0, numBars = 4) {
         if (!abcString || !abcString.trim()) {
             console.warn('Empty ABC string provided to extractBarsFromABC');
@@ -1119,7 +1216,11 @@ transposeDrumNotes(line, keySignature = 'C') {
         return finalResult;
     }
 
-    // Add debugging to generateScoreFollower
+    /**
+     * Generates ABC notation for score following starting at a specific bar
+     * @param {number} startBar - Starting bar number (0-based, default: 0)
+     * @returns {string} ABC notation for the specified bar range
+     */
     generateScoreFollower(startBar = 0) {
         if (!this.abcString || !this.abcString.trim()) {
             console.warn('No ABC data available for score following');
@@ -1145,7 +1246,11 @@ transposeDrumNotes(line, keySignature = 'C') {
         return followingABC;
     }
 
-    // Fix initial rendering issue
+    /**
+     * Renders score follower showing a specific 4-bar window
+     * @param {string} containerId - Container element ID (default: 'score')
+     * @param {number} startBar - Starting bar number (0-based, default: 0)
+     */
     renderScoreFollower(containerId = 'score', startBar = 0) {
         // console.log(`Rendering score follower: bars ${startBar}-${startBar + 3}`);
         
@@ -1169,7 +1274,10 @@ transposeDrumNotes(line, keySignature = 'C') {
         // console.log('Score follower rendered successfully');
     }
 
-    // Enhanced reset method with better fallback
+    /**
+     * Resets the score follower to the beginning of the piece
+     * @param {string} containerId - Container element ID (default: 'score')
+     */
     resetScoreFollower(containerId = 'score') {
         // console.log('Resetting score follower to beginning');
         this.currentBarStart = 0;
@@ -1213,7 +1321,10 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
 
-    // Modified showMidiScore to handle when ABC generation has failed
+    /**
+     * Displays the MIDI score with optional score following
+     * @param {boolean} useScoreFollowing - Whether to enable real-time score following
+     */
     showMidiScore(useScoreFollowing = false) {
         const scoreDiv = document.getElementById('score');
         
@@ -1286,7 +1397,10 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
 
-    // Add manual controls for score follower (for testing/debugging)
+    /**
+     * Adds manual controls for score follower navigation (for testing/debugging)
+     * @param {HTMLElement} container - Container element to add controls to
+     */
     addScoreFollowerControls(container) {
         // Check if controls already exist
         if (container.querySelector('.score-follower-controls')) {
@@ -1314,7 +1428,10 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
 
-    // Add method to handle downbeat information
+    /**
+     * Sets the first musical bar information for score synchronization
+     * @param {Object} downbeat - Downbeat information from transport
+     */
     setFirstMusicalBar(downbeat) {
         this.firstDownbeat = downbeat;
         
@@ -1322,7 +1439,10 @@ transposeDrumNotes(line, keySignature = 'C') {
         // console.log(`First downbeat detected at: ${downbeat.time.toFixed(2)}s (${downbeat.method})`);
     }
 
-    // Method to get current playback bar position
+    /**
+     * Gets the current playback bar position from transport timing
+     * @returns {number} Current bar number (0-based)
+     */
     getCurrentPlaybackBar() {
         const transport = this.app.modules.transport;
         if (!transport || !transport.playing) {
@@ -1367,7 +1487,12 @@ transposeDrumNotes(line, keySignature = 'C') {
 
 
 
-    // Centralized update logic
+    /**
+     * Updates the score follower to show the current playback position
+     * @param {string} containerId - Container element ID
+     * @param {number} barNumber - Current bar number being played
+     * @param {boolean} immediately - Whether to update immediately without debouncing
+     */
     updateScoreFollower(containerId, barNumber, immediately = false) {
 
         // Update current bar display
@@ -1401,7 +1526,11 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
 
-    // Enhanced score following with playback integration
+    /**
+     * Starts score following mode with real-time playback synchronization
+     * @param {string} containerId - Container element ID (default: 'score')
+     * @param {number} startBar - Starting bar number (default: 0)
+     */
     startScoreFollowing(containerId = 'score', startBar = 0) {
         // console.log(`Starting score following at bar ${startBar}...`);
         this.scoreFollowerActive = true;
@@ -1422,7 +1551,10 @@ transposeDrumNotes(line, keySignature = 'C') {
         this.startPollingForPlayback(containerId);
     }
 
-    // Method to start polling when playback starts
+    /**
+     * Starts polling the transport for playback position updates
+     * @param {string} containerId - Container element ID for updates
+     */
     startPollingForPlayback(containerId) {
         if (this.pollingInterval) {
             clearInterval(this.pollingInterval);
@@ -1453,7 +1585,9 @@ transposeDrumNotes(line, keySignature = 'C') {
         }, 50); // Even more frequent polling for better responsiveness
     }
 
-    // Method to stop polling when playback stops
+    /**
+     * Stops polling for playback position when playback ends
+     */
     stopPollingForPlayback() {
         if (this.pollingInterval) {
             // console.log('Stopping score following polling (playback stopped)');
@@ -1462,7 +1596,9 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
 
-    // Enhanced stop method
+    /**
+     * Stops all score following activity and cleans up resources
+     */
     stopScoreFollowing() {
         // console.log('Stopping score following...');
         this.scoreFollowerActive = false;
@@ -1484,7 +1620,11 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
 
-    // Enhanced advance method with better display updates
+    /**
+     * Manually advances the score follower by a specified number of bars
+     * @param {string} containerId - Container element ID (default: 'score')
+     * @param {number} bars - Number of bars to advance (can be negative, default: 4)
+     */
     advanceScoreFollower(containerId = 'score', bars = 4) {
         const newStart = Math.max(0, this.currentBarStart + bars);
         
@@ -1502,7 +1642,9 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
 
-    // Enhanced hide method to clean up score following
+    /**
+     * Hides the score display and cleans up score following resources
+     */
     hideScore() {
         // console.log('Hiding score and cleaning up score follower');
         this.stopScoreFollowing();
@@ -1516,6 +1658,9 @@ transposeDrumNotes(line, keySignature = 'C') {
         }
     }
 
+    /**
+     * Shows the score with automatic score following enabled
+     */
     showScore() {
         this.scoreShown = true;
         const scoreContainer = document.getElementById('scoreContainer');
@@ -1534,7 +1679,9 @@ transposeDrumNotes(line, keySignature = 'C') {
         this.addScoreFollowerControls(scoreContainer);
     }
 
-    // Add debugging method to check sync
+    /**
+     * Debug method to check synchronization between score and playback
+     */
     debugCurrentPosition() {
         const transport = this.app.modules.transport;
         if (transport && transport.playing) {

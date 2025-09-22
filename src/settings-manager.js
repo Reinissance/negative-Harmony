@@ -1,20 +1,39 @@
 /**
  * Settings Manager Module
- * Handles user settings persistence, URL sharing, and file settings management
+ * Handles user settings persistence, URL sharing, file settings management,
+ * and dynamic loading of third-party modules like ShareThis
  */
 
-// const Utils = require("./utils");
-
+/**
+ * Manages application settings, URL parameters, sharing functionality, and UI controls
+ * @class SettingsManager
+ */
 class SettingsManager {
+    /**
+     * Creates an instance of SettingsManager
+     * @param {Object} app - Reference to the main application instance
+     */
     constructor(app) {
         this.app = app;
+        /** @type {Function} Debounced function to prevent excessive settings updates */
         this.debouncedUpdateUserSettings = Utils.debounce(this.updateUserSettings.bind(this), 300);
+        /** @type {boolean} Tracks whether ShareThis module has been loaded */
         this.shareThisLoaded = false;
     }
 
+    /**
+     * Initialize the settings manager
+     * @async
+     */
     async init() {
+        // Currently no initialization required
     }
 
+    /**
+     * Dynamically loads the ShareThis module when needed
+     * Similar to how ScoreManager loads ABC.js - loads on demand to improve initial page load
+     * @returns {Promise<void>} Resolves when module is loaded or if already loaded
+     */
     loadModule() {
         return new Promise((resolve, reject) => {
             if (this.shareThisLoaded) {
@@ -34,13 +53,19 @@ class SettingsManager {
             script.onerror = () => {
                 console.warn('Failed to load ShareThis module');
                 this.shareThisLoaded = false;
-                resolve(); // Don't reject, just continue without ShareThis
+                resolve(); // Don't reject - gracefully continue without ShareThis
             };
             
             document.head.appendChild(script);
         });
     }
 
+    /**
+     * Updates user settings in the application state
+     * @param {string} key - Setting key name
+     * @param {*} value - Setting value
+     * @param {number} channel - MIDI channel number (-1 for global settings)
+     */
     updateUserSettings(key, value, channel) {
         const state = this.app.state;
         
@@ -56,6 +81,14 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Sets a resettable setting that can be restored to file defaults
+     * @param {number} channel - MIDI channel number
+     * @param {string} setting - Setting name
+     * @param {*} value - Setting value
+     * @param {string} type - Setting type ("slider" or "select")
+     * @returns {HTMLElement|null} The created DOM element or null
+     */
     setResettable(channel, setting, value, type) {
         const fileSettings = this.app.fileSettings;
         let resetSetting = fileSettings[channel] || {};
@@ -79,11 +112,16 @@ class SettingsManager {
         return null;
     }
 
+    /**
+     * Parses URL parameters and applies corresponding settings
+     * @async
+     * @param {URLSearchParams} urlParams - URL search parameters
+     */
     async checkForParamsInUrl(urlParams) {
         let settingsFound = false;
         const state = this.app.state;
 
-        // Global settings
+        // Process reversed playback setting
         const reversed = urlParams.get('reversedPlayback');
         let keepReversed = false;
         if (reversed) {
@@ -97,6 +135,7 @@ class SettingsManager {
             settingsFound = true;
         }
         
+        // Process negative harmony root setting
         const negRootParam = urlParams.get('negRoot');
         if (negRootParam) {
             const negRootSelect = document.getElementById("parameter_negRoot");
@@ -111,9 +150,9 @@ class SettingsManager {
             settingsFound = true;
         }
         
+        // Process per-octave inversion setting
         const perOktaveParam = urlParams.get('perOktave');
         if (perOktaveParam) {
-            // this.app.setPerOctave(parseFloat(perOktaveParam));
             state.perOktave = parseInt(perOktaveParam);
             this.debouncedUpdateUserSettings("perOktave", state.perOktave, -1);
             const oktSelect = document.getElementById("parameter_perOktave");
@@ -121,6 +160,7 @@ class SettingsManager {
             settingsFound = true;
         }
         
+        // Process harmony mode setting (normal, lefthand piano, negative harmony)
         const modeParam = urlParams.get('mode');
         if (modeParam) {
             state.mode = parseInt(modeParam, 10);
@@ -131,6 +171,7 @@ class SettingsManager {
             settingsFound = true;
         }
         
+        // Process impulse response (reverb) setting
         const irUrlParam = urlParams.get('irUrl');
         const audioEngine = this.app.modules.audioEngine;
         if (irUrlParam) {
@@ -148,7 +189,7 @@ class SettingsManager {
             }
             settingsFound = true;
         } else {
-            // Load default impulse response
+            // Load default impulse response if none specified
             if (audioEngine && audioEngine.setIR) {
                 audioEngine.setIR('182806__unfa__ir-02-gunshot-in-a-chapel-mixed');
             }
@@ -157,6 +198,7 @@ class SettingsManager {
             }
         }
         
+        // Process reverb gain setting
         const reverbGainParam = urlParams.get('reverbGain');
         if (reverbGainParam) {
             const revSlider = document.getElementById("reverbVolume");
@@ -174,7 +216,7 @@ class SettingsManager {
             settingsFound = true;
         }
         
-        // Handle MIDI file loading
+        // Handle MIDI file loading from URL
         const midiFileUrl = urlParams.get('midiFile');
         if (midiFileUrl && (midiFileUrl.endsWith(".mid") || midiFileUrl.endsWith(".midi"))) {
             state.midiFile = midiFileUrl;
@@ -184,21 +226,20 @@ class SettingsManager {
             const transport = this.app.modules.transport;
             if (transport.forceUpdateChannel) {
                 transport.updateChannels();
-                // console.error("Forcing update of channel ranges after loading MIDI file.");
                 transport.forceUpdateChannel = false;
             }
             settingsFound = true;
         } else {
-            // No MIDI file, load default piano
+            // No MIDI file specified - load default piano
             Utils.setPlayButtonActive(true);
             if (this.app.modules.midiManager?.midiInputs?.length > 0) {
-                // TODO: Load default piano sound and create Controls
                 console.log("Loading default: piano");
                 const audioEngine = this.app?.modules.audioEngine;
                 audioEngine?.loadInstrumentsForProgramChange(0, 0, 0, "Piano");
             }
         }
 
+        // Process playback speed setting
         const speedParam = urlParams.get('speed');
         if (speedParam) {
             this.app.modules.transport.setSpeed(parseFloat(speedParam));
@@ -210,9 +251,14 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Generates a shareable URL with current settings and loads ShareThis module
+     * @async
+     * @returns {Promise<string>} The generated share URL
+     */
     share() {
         return new Promise(async (resolve) => {
-            // Load ShareThis module if not already loaded
+            // Load ShareThis module dynamically when sharing is actually needed
             await this.loadModule();
 
             const baseUrl = window.location.href.split('?')[0];
@@ -220,7 +266,7 @@ class SettingsManager {
             // Flatten the state structure for URL parameters
             const urlParams = { ...this.app.state };
 
-            // Move channels from userSettings.channels to top-level channels
+            // Move channels from userSettings.channels to top-level channels for URL encoding
             if (this.app.state.userSettings && this.app.state.userSettings.channels) {
                 urlParams.channels = this.app.state.userSettings.channels;
             }
@@ -232,6 +278,7 @@ class SettingsManager {
             
             Utils.updateShareUrl(shareUrl);
 
+            // Show ShareThis buttons if available
             const shares = document.getElementById("st-1")
             if (shares) {
                 shares.style.display = "block";
@@ -242,6 +289,10 @@ class SettingsManager {
         });
     }
 
+    /**
+     * Shares current settings and copies URL to clipboard with copyright warning
+     * @async
+     */
     async shareAndCopy() {
         const shareUrl = await this.share();
         navigator.clipboard.writeText(shareUrl).then(() => {
@@ -252,13 +303,19 @@ class SettingsManager {
         });
     }
 
+    /**
+     * Loads a MIDI file from a URL and applies any channel settings
+     * @async
+     * @param {string} midiFileUrl - URL of the MIDI file
+     * @param {URLSearchParams} urlParams - Additional URL parameters
+     */
     async loadMidiFileFromUrl(midiFileUrl, urlParams) {
         try {
             const response = await fetch(midiFileUrl);
             const data = await response.arrayBuffer();
             
             this.app.localFile = false;
-            // Handle channel settings
+            // Handle channel settings that may be embedded in the URL
             await this.applyChannelSettings(urlParams);
             const midiManager = this.app.modules.midiManager;
             if (midiManager) {
@@ -267,8 +324,7 @@ class SettingsManager {
                 console.error("Cannot load MIDI file: modular MIDI manager not available.");
             }
 
-
-            // Update UI
+            // Update UI elements
             document.getElementById("midiUrl").value = midiFileUrl;
             const shareUrl = this.share();
 
@@ -279,11 +335,16 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Applies channel-specific settings from URL parameters
+     * @async
+     * @param {URLSearchParams} urlParams - URL parameters containing channel settings
+     */
     async applyChannelSettings(urlParams) {
         const channelsParam = urlParams.get('channels');
         
         if (channelsParam) {
-            // Wait for MIDI file to be fully loaded
+            // Wait for MIDI file to be fully loaded before applying settings
             setTimeout(() => {
                 if (channelsParam) {
                     this.applyChannelParams(channelsParam);
@@ -292,6 +353,10 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Parses and applies encoded channel parameters from URL
+     * @param {string} channelsParam - JSON-encoded channel parameters
+     */
     applyChannelParams(channelsParam) {
         const state = this.app.state;
         
@@ -300,7 +365,7 @@ class SettingsManager {
             for (const channel in state.userSettings.channels) {
                 const channelSettings = { ...state.userSettings.channels[channel] };
                 
-                // Apply select elements first
+                // Apply select elements first (instrument changes, drum note mappings)
                 const keys = Object.keys(channelSettings);
                 const selectKeys = keys.filter(key => 
                     key.includes("drumNoteChange") || key.includes("instrument")
@@ -313,7 +378,7 @@ class SettingsManager {
                     if (element) {
                         let index = value;
                         if (setting.includes("Change")) {
-                            index = parseInt(index) - 35; // Drum notes adjustment
+                            index = parseInt(index) - 35; // Drum notes are offset by 35 in MIDI
                         }
                         element.selectedIndex = index;
                         element.dispatchEvent(new Event('change'));
@@ -321,7 +386,7 @@ class SettingsManager {
                     }
                 }
                 
-                // Apply other settings after a delay
+                // Apply remaining settings after a delay to ensure UI is ready
                 setTimeout(() => {
                     this.applyRemainingChannelSettings(channelSettings, channel);
                 }, 1000);
@@ -331,6 +396,11 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Applies remaining channel settings (sliders, etc.) after initial setup
+     * @param {Object} channelSettings - Settings object for the channel
+     * @param {string|number} channel - Channel number
+     */
     applyRemainingChannelSettings(channelSettings, channel) {
         for (const setting in channelSettings) {
             const value = channelSettings[setting];
@@ -347,13 +417,20 @@ class SettingsManager {
             }
         }
         
-        // Show reset button
+        // Show reset button since user settings have been applied
         const resetBtn = document.getElementById("resetButton_" + channel);
         if (resetBtn) {
             resetBtn.style.display = "block";
         }
     }
 
+    /**
+     * Creates UI controls for a MIDI channel (instrument selection, volume, pan, etc.)
+     * @param {number} channel - MIDI channel number
+     * @param {number} programNumber - MIDI program number (instrument)
+     * @param {number} sfIndex - SoundFont index
+     * @param {string} name - Display name for the channel
+     */
     createControlsForChannel(channel, programNumber, sfIndex, name) {
         let element = document.getElementById("channel_controls_" + channel);
         if (element) return;
@@ -523,6 +600,13 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Creates UI controls for drum instrument configuration
+     * Handles GM drum kit mapping and soundfont selection per drum note
+     * @param {number} note - MIDI note number (35-81 for GM drums)
+     * @param {number} sf2Index - SoundFont index for this drum sound
+     * @param {string} callerId - ID of the element that triggered this creation
+     */
     createDrumInstrumentControl(note, sf2Index, callerId) {
         // Get audio engine references
         const audioEngine = this.app.modules.audioEngine;
@@ -712,6 +796,11 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Creates a reset button for channel settings
+     * @param {number} channel - MIDI channel number
+     * @returns {HTMLButtonElement} The created reset button element
+     */
     createResetButton(channel) {
         let resetButton = document.createElement("button");
         resetButton.id = "resetButton_" + channel;
@@ -724,9 +813,12 @@ class SettingsManager {
         return resetButton;
     }
 
+    /**
+     * Resets channel settings to original file values
+     * @param {number} channel - MIDI channel number to reset
+     */
     resetChannelSettings(channel) {
         const fileSettings = this.app.fileSettings;
-        // console.log("Restoring original settings for channel:", channel, fileSettings);
 
         if (fileSettings[channel]) {
             for (const setting in fileSettings[channel]) {
@@ -738,7 +830,7 @@ class SettingsManager {
                         element.selectedIndex = value;
                         element.dispatchEvent(new Event('change'));
                     } else if (element.tagName === 'INPUT' && element.type === 'range') {
-                        // Handle the panning special case from the original
+                        // Handle panning special case (legacy code compatibility)
                         value = (setting === "panning") ? value * 127 - 64 : value * 127;
                         element.value = value;
                         element.dispatchEvent(new Event('input'));
@@ -761,6 +853,9 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Resets all user settings to default values
+     */
     resetUserSettings() {
         const state = this.app.state;
         
@@ -768,10 +863,12 @@ class SettingsManager {
         state.userSettings = {
             channels: {}
         };
-        
-        // console.log('User settings reset to defaults');
     }
 
+    /**
+     * Shows the reset button for a channel if it has user modifications
+     * @param {number} channel - MIDI channel number
+     */
     showResetButtonIfNeeded(channel) {
         const state = this.app.state;
         
@@ -784,6 +881,10 @@ class SettingsManager {
         }
     }
 
+    /**
+     * Exports current settings for backup/sharing purposes
+     * @returns {Object} Object containing all current settings
+     */
     exportSettings() {
         const state = this.app.state;
         return {
@@ -797,6 +898,10 @@ class SettingsManager {
         };
     }
 
+    /**
+     * Imports settings from a settings object
+     * @param {Object} settings - Settings object to import
+     */
     importSettings(settings) {
         const state = this.app.state;
         
@@ -811,8 +916,6 @@ class SettingsManager {
         if (settings.globalSettings) {
             Object.assign(state, settings.globalSettings);
         }
-        
-        // console.log('Settings imported successfully');
     }
 }
 

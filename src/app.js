@@ -1,62 +1,94 @@
 /**
  * Core Application Module
- * Handles main application initialization and module coordination
+ * Main application class that coordinates all modules and handles negative harmony transformations.
+ * Manages application lifecycle, module initialization, and core music theory operations.
  */
 
+/**
+ * Main application class for the Negative Harmony application
+ * Coordinates all modules and provides core transformation functionality
+ * @class NegativeHarmonyApp
+ */
 class NegativeHarmonyApp {
+    /**
+     * Creates an instance of NegativeHarmonyApp
+     */
     constructor() {
+        /** @type {Object} Container for all application modules */
         this.modules = {};
+        /** @type {boolean} Whether the application has been fully initialized */
         this.initialized = false;
 
+        // Device detection for performance optimization
+        /** @type {boolean} Whether the app is running on a mobile device */
         this.isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        this.bufferSize = this.isMobile ? 2048 : 512; // Larger buffer for mobile
+        /** @type {number} Audio buffer size optimized for device type */
+        this.bufferSize = this.isMobile ? 2048 : 512; // Larger buffer for mobile to prevent dropouts
+        
+        // Core audio and timing properties
+        /** @type {AudioContext|null} Web Audio API context for all audio processing */
         this.audioContext = null;
+        /** @type {number} Current tempo in beats per minute */
         this.bpm = 120;
+        /** @type {number} Duration of loaded MIDI track in seconds */
         this.track_duration = 0;
+        /** @type {boolean} Whether a MIDI file has been successfully loaded */
         this.midiFileRead = false;
+        /** @type {boolean} Internal flag for mode state management */
         this.normal = false;
+        /** @type {boolean} Whether the current file is loaded locally vs from URL */
         this.localFile = false;
+        /** @type {Object} Original file settings for reset functionality */
         this.fileSettings = {};
 
-        // Global state
+        // Application state object containing all user-configurable settings
         this.state = {
+            /** @type {string} URL or path to loaded MIDI file */
             midiFile: "",
+            /** @type {number} Playback speed multiplier (0.5-2.0) */
             speed: 1.0,
+            /** @type {number} Selected impulse response index for reverb */
             irUrl: 1,
+            /** @type {number} Reverb send level (0.0-1.0) */
             reverbGain: 0.5,
+            /** @type {boolean} Whether playback is in reverse mode */
             reversedPlayback: false,
+            /** @type {Object} User-modified channel settings */
             userSettings: { "channels": {} },
+            /** @type {number|null} Root note for negative harmony transformation (0-11, null for auto-detect) */
             negRoot: null,
-            mode: 2,    // Default mode
-            perOktave: 2, // Default per voice value
+            /** @type {number} Transformation mode: 0=normal, 1=inversion, 2=negative harmony */
+            mode: 2,
+            /** @type {number} Inversion scope: 1=per octave, 2=per voice range */
+            perOktave: 2,
         };
     }
 
     /**
-     * Initialize the application
+     * Initialize the application and all its modules
+     * Loads external libraries, creates modules, and sets up the UI
+     * @async
      */
     async init() {
         if (this.initialized) return;
 
         try {
-            // Load external libraries first
+            // Load external libraries first (Tone.js, WebAudioFont, etc.)
             await this.loadLibraries();
-            // console.log('All libraries loaded successfully');
             
-            // Load modules after libraries
+            // Load application modules
             await this.loadModules();
-            // console.log('All modules loaded successfully');
             
-            // Initialize modules after everything is loaded
+            // Initialize all modules in dependency order
             this.initializeModules();
             
-            // Initialize UI components
+            // Set up UI components and event handlers
             this.initializeUI();
             
             this.initialized = true;
             console.log('Negative Harmony App initialized successfully');
             
-            // Make app globally available
+            // Make app globally available for debugging and external access
             window.app = this;
             
         } catch (error) {
@@ -65,14 +97,18 @@ class NegativeHarmonyApp {
         }
     }
 
+    /**
+     * Loads external JavaScript libraries required by the application
+     * @async
+     */
     async loadLibraries() {
         try {
             // Load utilities first as other modules depend on it
             await this.loadScript('./src/utils.js');
             
-            // Load other libraries
+            // Load core audio and MIDI processing libraries
             await this.loadScript('https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js');
-            await this.loadScript('https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js');
+            // WebAudioFont is now loaded on-demand by AudioEngine
             await this.loadScript('https://unpkg.com/@tonejs/midi@2.0.24');
             
         } catch (error) {
@@ -82,7 +118,9 @@ class NegativeHarmonyApp {
     }
 
     /**
-     * Helper method to load external scripts
+     * Helper method to load external JavaScript files
+     * @param {string} src - URL or path to the script
+     * @returns {Promise<void>} Resolves when script is loaded
      */
     loadScript(src) {
         return new Promise((resolve, reject) => {
@@ -94,6 +132,10 @@ class NegativeHarmonyApp {
         });
     }
 
+    /**
+     * Loads application modules dynamically
+     * @returns {Promise<void>} Resolves when all modules are loaded
+     */
     loadModules() {
         return new Promise((resolve, reject) => {
             const modules = [
@@ -124,7 +166,9 @@ class NegativeHarmonyApp {
     }
 
     /**
-     * Initialize application modules
+     * Initialize application modules in the correct dependency order
+     * Each module receives a reference to the main app instance
+     * @async
      */
     async initializeModules() {
         // Initialize modules in dependency order
@@ -134,7 +178,7 @@ class NegativeHarmonyApp {
         this.modules.transport = new Transport(this);
         this.modules.scoreManager = new ScoreManager(this);
 
-        // Initialize each module
+        // Call init() on each module to set up event handlers and state
         await this.modules.midiManager.init();
         await this.modules.audioEngine.init();
         await this.modules.settingsManager.init();
@@ -144,22 +188,22 @@ class NegativeHarmonyApp {
 
     /**
      * Transform a MIDI note based on the current negative harmony settings
+     * This is the core transformation engine that applies various musical transformations
      * @param {number} note - MIDI note number (0-127)
-     * @returns {number} - Transformed MIDI note number
+     * @param {number} channel - MIDI channel for context-aware transformations
+     * @returns {number} Transformed MIDI note number
      */
     transformNote(note, channel) {
         const { mode, negRoot, perOktave } = this.state;
 
         switch (mode) {
             case 0: // Normal mode - no transformation
-                // console.log("Normal mode, returning note:", note);
                 return note;
                 
-            case 1: // Inversion mode
+            case 1: // Inversion mode - mirror notes around an axis
                 return this.leftHandPianoNote(note, perOktave, channel);
                 
-            case 2: // Negative harmony mode
-                // console.log("Transforming note:", note, "Channel:", channel, "Mode:", mode, "NegRoot:", negRoot, "PerOktave:", perOktave);
+            case 2: // Negative harmony mode - apply negative harmony transformation
                 return this.negativeHarmonyTransform(note, perOktave, negRoot, channel);
 
             default:
@@ -168,29 +212,36 @@ class NegativeHarmonyApp {
     }
 
     /**
-     * Apply simple inversion transformation
-     * @param {number} note - MIDI note number
-     * @param {number} perOktave - Inversion factor
-     * @returns {number} - Inverted note
+     * Apply simple inversion transformation (mode 1)
+     * Can invert globally, per octave, or per voice range
+     * @param {number} note - MIDI note number (0-127)
+     * @param {number} perOktave - Inversion scope: 0=global, 1=per octave, 2=per voice
+     * @param {number} channel - MIDI channel for voice-specific inversion
+     * @returns {number} Inverted note
      */
     leftHandPianoNote(note, perOktave, channel) {
         if (!perOktave) {
-            // console.log("No perOktave set, returning inverted note:", (82 - (note - 21)) + 21);
+            // Global inversion around middle of piano range (C4-G5)
             return (82 - (note - 21)) + 21;
         } else {
             if (perOktave === 1) {
+                // Per-octave inversion - invert within each octave
                 const okt = Math.floor((note + 2) / 12) * 12;
                 let mod_note = ((82 - (note + 2 - 21)) + 21) % 12;
                 mod_note = (mod_note < 9) ? mod_note : mod_note - 12;
-                // console.log("Returning inverted note per octave:", okt + mod_note + 2);
                 return okt + mod_note + 2;
             } else if (perOktave === 2) {
-                // get the note's channel's range from transport modules. parts[] for per-voice inversion using channel-specific range
-                const rangeData = this.modules.transport.parts[channel]['noteRange'];
+                // Per-voice inversion - invert around the middle of each voice's range
+                const rangeData = this.modules.transport.parts[channel]?.['noteRange'];
+                if (!rangeData) {
+                    // Fallback if range data not available
+                    return this.leftHandPianoNote(note, 0, channel);
+                }
+                
                 const rangeMiddle = (rangeData.lowest + rangeData.highest) / 2;
                 
                 // Find the D note closest to the middle of the range
-                // D notes are at MIDI numbers: 2, 14, 26, 38, 50, 62, 74, 86, 98, 110, 122
+                // D notes provide a natural axis for musical inversion
                 const dNotes = [];
                 for (let d = 2; d <= 122; d += 12) {
                     dNotes.push(d);
@@ -208,8 +259,7 @@ class NegativeHarmonyApp {
                     }
                 }
                 
-                // Invert around the closest D
-                // The axis is at closestD, so inversion formula is: 2 * axis - note
+                // Invert around the closest D using the formula: 2 * axis - note
                 const invertedNote = 2 * closestD - note;
                 
                 return Math.max(0, Math.min(127, invertedNote)); // Clamp to valid MIDI range
@@ -221,28 +271,35 @@ class NegativeHarmonyApp {
     }
 
     /**
-     * Apply negative harmony transformation
-     * @param {number} note - MIDI note number
-     * @param {number} negRoot - Negative root (0-11)
-     * @returns {number} - Transformed note
+     * Apply negative harmony transformation (mode 2)
+     * Implements the negative harmony concept where the tonic-dominant axis becomes
+     * the axis of symmetry for pitch reflection
+     * @param {number} note - MIDI note number (0-127)
+     * @param {number} perOctave - Transformation scope: 1=per octave, 2=per voice
+     * @param {number} negRoot - Root note for the transformation (0-11)
+     * @param {number} channel - MIDI channel for voice-specific transformation
+     * @returns {number} Transformed note according to negative harmony
      */
     negativeHarmonyTransform(note, perOctave, negRoot, channel) {
         if (perOctave == 1) {
-            const neg = (negRoot - 3) % 12; // this is for backwards compatibility - neg is the actual negative root
+            // Per-octave negative harmony transformation
+            const neg = (negRoot - 3) % 12; // Backwards compatibility offset
             const octave = Math.floor(note / 12);
             const semitone = note % 12;
             
-            // Calculate the axis of symmetry (between tonic and dominant)
+            // Calculate the axis of symmetry (halfway between tonic and dominant)
+            // In negative harmony, this axis is at tonic + 3.5 semitones
             const axis = (neg + 3.5) % 12;
             
             // Reflect the note across the axis
             let reflectedSemitone = 2 * axis - semitone;
 
-            // Handle negative results properly
+            // Handle negative results properly with modular arithmetic
             reflectedSemitone = ((reflectedSemitone % 12) + 12) % 12;
             
             let transformedNote = octave * 12 + reflectedSemitone;
 
+            // Apply octave adjustments to maintain musical coherence
             if (semitone <= neg) {
                 transformedNote -= 12;
             }
@@ -255,22 +312,25 @@ class NegativeHarmonyApp {
             return transformedNote;
         }
         else if (perOctave == 2 && channel != 9) {
-            // get the note's channel's range from transport modules. parts[] for per-voice inversion using channel-specific range
+            // Per-voice negative harmony transformation
+            // Uses the range of each voice to position the transformation axis
             if (!this.modules.transport.parts[channel]) {
-                // console.warn(`No note range data for channel ${channel}:`, this.modules.transport.parts);
-                // Fallback to perOctave=1 behavior, should be fixed in transport.js, line 572
+                console.warn(`No note range data for channel ${channel}:`, this.modules.transport.parts);
+                // Fallback to per-octave behavior
                 this.modules.transport.forceUpdateChannel = true;
                 return this.negativeHarmonyTransform(note, 1, negRoot, channel);
             }
+            
             const rangeData = this.modules.transport.parts[channel]['noteRange'];
             if (!rangeData) {
                 console.log(`No rangeData for channel ${channel}, ${JSON.stringify(this.modules.transport.parts[channel])}`);
             }
+            
             const rangeMiddle = (rangeData.lowest + rangeData.highest) / 2;
             
-            // Calculate the axis based on negRoot, but positioned at the range middle
-            const neg = (negRoot - 3) % 12; // backwards compatibility
-            const axisSemitone = (neg + 3.5) % 12; // same axis calculation as perOctave == 1
+            // Calculate the axis based on negRoot, positioned at the range middle
+            const neg = (negRoot - 3) % 12; // Backwards compatibility offset
+            const axisSemitone = (neg + 3.5) % 12; // Same axis calculation as perOctave == 1
             
             // Find the note with axisSemitone that's closest to the range middle
             const axisOctaves = [];
@@ -298,21 +358,25 @@ class NegativeHarmonyApp {
             
             return Math.max(0, Math.min(127, transformedNote)); // Clamp to valid MIDI range
         } else {
-            // For non-perOctave mode, just reflect the note across negRoot + 0.5
+            // Simple reflection for non-per-octave mode
             const reflectedNote = 2 * negRoot - note + 1;
-            // console.log("Reflected note:", reflectedNote, "from original note:", note, "with negRoot:", negRoot);
             return reflectedNote;
         }
     }
 
+    /**
+     * Start the audio system and initialize audio context
+     * Must be called after user interaction due to browser autoplay policies
+     * @async
+     */
     async start() {
-        // Create and initialize audio context
+        // Create audio context with device-appropriate settings
         this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
             latencyHint: this.isMobile ? 'playback' : 'interactive',
             bufferSize: this.bufferSize
         });
         
-        // Make audioContext available globally for WebAudioFont
+        // Make audioContext globally available for WebAudioFont and legacy code
         if (typeof window !== 'undefined') {
             window.audioContext = this.audioContext;
             // Also set the global variable for backward compatibility
@@ -321,14 +385,16 @@ class NegativeHarmonyApp {
             }
         }
         
+        // Initialize Tone.js with the audio context
         await Tone.start();
+        // AudioEngine will load WebAudioFont on-demand when setupGMPlayer is called
         await this.modules.audioEngine.setupGMPlayer();
         
-        // Hide start prompt and setup initial state
+        // Hide start prompt and show main interface
         document.getElementById("start_prompt").hidden = true;
         document.getElementById("col_transport").style = "";
         
-        // Check for URL parameters
+        // Check for URL parameters to restore shared settings
         const urlParams = new URLSearchParams(window.location.search);
 
         if (urlParams.toString().length > 0) {
@@ -338,48 +404,78 @@ class NegativeHarmonyApp {
         }
     }
 
+    /**
+     * Updates UI visibility based on the current transformation mode
+     * Shows/hides controls relevant to the selected mode
+     */
     setModeSettingsHidden() {
+        // Negative harmony root selection (only for mode 2)
         const negRoots = document.getElementById("negRoots");
         negRoots.hidden = (this.state.mode == 2) ? false : true;
         
+        // Per-octave/per-voice settings (for modes 1 and 2)
         const perOkt = document.getElementById("perOkt");
         perOkt.hidden = (this.state.mode == 0) ? true : false;
         this.normal = perOkt.hidden;
     }
 
+    /**
+     * Sets the transformation mode and updates the interface
+     * @param {string|number} value - Mode value: 0=normal, 1=inversion, 2=negative harmony
+     */
     setMode(value) {
         // Convert to integer to ensure proper switch statement matching
         this.state.mode = parseInt(value, 10);
 
+        // Update UI visibility
         this.setModeSettingsHidden();
 
+        // Re-transform all currently scheduled notes
         this.modules.transport.updateChannels();
         
+        // Stop any playing notes to prevent harmonic conflicts
         this.modules.midiManager.sendEvent_allNotesOff();
         this.modules.settingsManager.debouncedUpdateUserSettings("mode", this.state.mode, -1);
     }
 
+    /**
+     * Sets the negative harmony root note
+     * @param {string|number} value - Root note value (0-11)
+     */
     setNegRoot(value) {
         const intValue = parseInt(value, 10);
         this.state.negRoot = intValue;
+        
+        // Re-transform all notes with the new root
         this.modules.transport.updateChannels();
 
+        // Clear playing notes to avoid dissonance
         this.modules.midiManager.sendEvent_allNotesOff();
         this.modules.settingsManager.debouncedUpdateUserSettings("negRoot", intValue, -1);
     }
 
+    /**
+     * Sets the per-octave transformation scope
+     * @param {string|number} value - Scope value: 1=per octave, 2=per voice
+     */
     setPerOctave(value) {
         const intValue = parseInt(value, 10);
         this.state.perOktave = intValue;
 
+        // Re-transform with new scope
         this.modules.transport.updateChannels();
         
+        // Clear playing notes
         this.modules.midiManager.sendEvent_allNotesOff();
         this.modules.settingsManager.debouncedUpdateUserSettings("perOktave", intValue, -1);
     }
 
-    // Methods moved from inline JavaScript in index.html
-    
+    // Methods moved from inline JavaScript in index.html for better organization
+
+    /**
+     * Called when all modules are loaded and ready
+     * Shows the transport controls to the user
+     */
     moduleLoaded() {
         document.getElementById("transportButton").style.visibility = "visible";
         const toggler = document.getElementsByClassName("st-toggle")[0];
@@ -387,38 +483,52 @@ class NegativeHarmonyApp {
             toggler.style.display = "none";
     }
 
+    /**
+     * Initializes the audio system when user clicks the start button
+     * Required for browser autoplay policy compliance
+     * @param {HTMLElement} element - The button element that was clicked
+     */
     toggleTransport(element) {
         this.start();
         var transportButton = document.getElementById("transportButton");
         transportButton.style.display = "none";
-        // hide the label too
+        // Hide the label too
         var transportLabel = document.getElementById("transportLabel");
         transportLabel.style.display = "none";
     }
 
+    /**
+     * Loads a MIDI file from a URL entered by the user
+     * Supports both direct MIDI files and search integration
+     */
     reloadWithUrl() {
         const midiFileUrl = document.getElementById("midiUrl").value;
         if (midiFileUrl) {
             if (!midiFileUrl.endsWith(".mid") && !midiFileUrl.endsWith(".midi")) {
-                // delegate to BitMidiSearch module
+                // Delegate to BitMidiSearch module for non-MIDI URLs
                 if (window.BitMidiSearch) {
                     window.BitMidiSearch.search(midiFileUrl, 0);
                 }
                 return;
             }
+            
             Utils.setPlayButtonActive(false);
             this.state.midiFileUrl = midiFileUrl;
+            
             fetch(midiFileUrl)
                 .then(response => response.arrayBuffer())
                 .then(data => {
                     this.localFile = false;
+                    // Clean up previous file
                     this.modules.transport.preclean();
                     this.modules.transport.cleanup();
+                    // Parse new MIDI file
                     this.modules.midiManager.parseMidiFile(new Midi(data));
                     this.modules.settingsManager.share();
                     this.state.midiFile = midiFileUrl;
                     document.getElementById("midiUrl").value = midiFileUrl;
                     Utils.setPlayButtonActive(true);
+                    // Generate share URL
                     const settingsManager = this.modules.settingsManager;
                     settingsManager.share();
                 })
@@ -429,21 +539,27 @@ class NegativeHarmonyApp {
         }
     }
 
-    // Initialize UI components like tooltips and examples
+    /**
+     * Initialize UI components like tooltips and load example files
+     */
     initializeUI() {
-        // Initialize Bootstrap tooltips
+        // Initialize Bootstrap tooltips for help text
         var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-toggle="tooltip"]'))
         var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
             return new bootstrap.Tooltip(tooltipTriggerEl)
         });
 
-        // Load examples
+        // Load example MIDI files for demo purposes
         this.loadExamples();
 
-        // Initialize BitMidiSearch module
+        // Initialize BitMidiSearch module if available
         window.BitMidiSearch?.init();
     }
 
+    /**
+     * Loads example MIDI files from examples.json and creates clickable links
+     * Provides users with demo content to explore negative harmony
+     */
     loadExamples() {
         fetch("examples.json")
             .then(response => response.json())
@@ -453,6 +569,7 @@ class NegativeHarmonyApp {
 
                 const list = document.createElement("ul");
 
+                // Create nested lists organized by artist
                 for (const artist in data) {
                     const artistItem = document.createElement("li");
                     const artistHeader = document.createElement("h4");
@@ -461,6 +578,7 @@ class NegativeHarmonyApp {
 
                     const songList = document.createElement("ol");
 
+                    // Create clickable links for each song
                     for (const song in data[artist]) {
                         const songItem = document.createElement("li");
                         const link = document.createElement("a");
@@ -468,15 +586,16 @@ class NegativeHarmonyApp {
                         link.href = "javascript:void(0);";
                         link.onclick = () => {
                             try {
+                                // Hide score if currently shown
                                 const scoreFollower = this.modules.scoreManager;
                                 if (scoreFollower && scoreFollower.scoreShown) {
                                     scoreFollower.hideScore();
                                 }
                                 
-                                // Ensure transport is properly cleaned before loading new content
+                                // Clean up current state
                                 this.modules.transport.preclean();
                                 
-                                // Add a small delay to ensure cleanup is complete
+                                // Load the example with a small delay for cleanup
                                 setTimeout(() => {
                                     const settingsManager = this.modules.settingsManager;
                                     settingsManager.checkForParamsInUrl(new URL(data[artist][song]).searchParams);

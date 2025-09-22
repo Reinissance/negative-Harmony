@@ -1,35 +1,55 @@
 /**
  * MIDI Manager Module
- * Handles MIDI device detection, setup, and message processing
+ * Handles MIDI device detection, setup, message processing, and file parsing.
+ * Manages both hardware MIDI devices and WebAudioFont synthesis.
  */
 
+/**
+ * Manages all MIDI functionality including device I/O, file parsing, and message routing
+ * @class MidiManager
+ */
 class MidiManager {
+    /**
+     * Creates an instance of MidiManager
+     * @param {Object} app - Reference to the main application instance
+     */
     constructor(app) {
         this.app = app;
+        /** @type {MIDIAccess|null} Web MIDI API access object */
         this.midiAccess = null;
+        /** @type {Array<MIDIInput>} Available MIDI input devices */
         this.midiInputs = [];
+        /** @type {MIDIOutput|null} Currently selected MIDI output port */
         this.midioutPort = null;
+        /** @type {HTMLSelectElement|null} MIDI outputs dropdown element */
         this.midiOutputsSelect = null;
+        /** @type {boolean} Whether MIDI is available in the browser */
         this.noMidi = true;
+        /** @type {Array<Object>} Currently active MIDI notes with envelopes */
         this.midiNotes = [];
+        /** @type {Map<number, boolean>} Sustain pedal state by MIDI channel */
         this.sustain = new Map();
+        /** @type {Map<string, Object>} Notes held by sustain pedal (key: "channel-pitch") */
         this.sustainedNodes = new Map();
+        /** @type {Set<number>} Channels currently in solo mode */
         this.soloChannels = new Set();
+        /** @type {Object|string} Currently loaded MIDI file data */
         this.file = "";
     }
 
+    /**
+     * Initialize the MIDI manager and request MIDI access
+     * @async
+     */
     async init() {
         // Setup file upload handler during initialization
         this.setupFileUploadHandler();
         
-        // request midi devices acces from user
+        // Request MIDI device access from user
         if (navigator.requestMIDIAccess) {
             try {
-                // console.log('Requesting MIDI access after user gesture...');
                 const midiAccess = await navigator.requestMIDIAccess();
-                
                 this.onMIDISuccess(midiAccess);
-                    // console.log('MIDI access granted and handled by modular system');
             } catch (error) {
                 console.warn('MIDI access denied or failed:', error);
                 this.onMIDIFailure(error);
@@ -39,6 +59,10 @@ class MidiManager {
         }
     }
 
+    /**
+     * Handles successful MIDI access and sets up devices
+     * @param {MIDIAccess} midiAccess - Web MIDI API access object
+     */
     onMIDISuccess(midiAccess) {
         this.noMidi = false;
         this.midiInputs = Array.from(midiAccess.inputs.values());
@@ -47,16 +71,19 @@ class MidiManager {
         this.setupMidiOutputs(midiAccess);
     }
 
+    /**
+     * Sets up MIDI input device selection and event handling
+     */
     setupMidiInputs() {
         const midiInputsSelect = document.getElementById("midiInputs");
         
-        // Add MidiPlayer as first option
+        // Add MidiPlayer as first option (for file playback)
         const playerOption = document.createElement("option");
         playerOption.value = 0;
         playerOption.text = "MidiPlayer";
         midiInputsSelect.add(playerOption);
 
-        // Add available MIDI inputs
+        // Add available hardware MIDI inputs
         this.midiInputs.forEach((input, index) => {
             const option = document.createElement("option");
             option.value = index;
@@ -64,7 +91,7 @@ class MidiManager {
             midiInputsSelect.add(option);
         });
 
-        // Preselect first input
+        // Preselect first input (MidiPlayer)
         if (this.midiInputs.length > 0) {
             midiInputsSelect.selectedIndex = 0;
         }
@@ -72,25 +99,31 @@ class MidiManager {
         // Handle input selection changes
         midiInputsSelect.onchange = () => {
             const selectedInput = this.midiInputs[midiInputsSelect.value];
+            // Clear all existing input handlers
             this.midiInputs.forEach(input => input.onmidimessage = null);
             
+            // Set up handler for selected hardware input (skip index 0 = MidiPlayer)
             if (selectedInput && midiInputsSelect.selectedIndex > 0) {
                 selectedInput.onmidimessage = (message) => this.onMIDIMessage(message);
             }
         };
     }
 
+    /**
+     * Sets up MIDI output device selection and routing
+     * @param {MIDIAccess} midiAccess - Web MIDI API access object
+     */
     setupMidiOutputs(midiAccess) {
         this.midiOutputsSelect = document.getElementById("midiOutputs");
         const midiOutputs = Array.from(midiAccess.outputs.values());
         
-        // Add WebAudioFont as first option
+        // Add WebAudioFont as first option (internal synthesis)
         const webAudioOption = document.createElement("option");
         webAudioOption.value = -1;
         webAudioOption.text = "WebAudioFont";
         this.midiOutputsSelect.add(webAudioOption);
 
-        // Add available MIDI outputs
+        // Add available hardware MIDI outputs
         midiOutputs.forEach((output, index) => {
             const option = document.createElement("option");
             option.value = index;
@@ -98,7 +131,7 @@ class MidiManager {
             this.midiOutputsSelect.add(option);
         });
 
-        // Preselect first output
+        // Preselect first output (WebAudioFont)
         if (midiOutputs.length > 0) {
             this.midiOutputsSelect.selectedIndex = 0;
         }
@@ -109,10 +142,15 @@ class MidiManager {
         };
     }
 
+    /**
+     * Sets up file upload handler for MIDI file loading
+     */
     setupFileUploadHandler() {
         document.getElementById('midiUpload').addEventListener('change', (event) => {
-            // Call transport preclean
-            this.app.state.negRoot = null
+            // Reset negative harmony root detection
+            this.app.state.negRoot = null;
+            
+            // Clean up previous file state
             const transport = this.app.modules.transport;
             if (transport) {
                 transport.preclean();
@@ -122,13 +160,13 @@ class MidiManager {
             if (load) {
                 const reader = new FileReader();
                 reader.onload = (e) => {
-
+                    // Mark as local file for UI behavior
                     this.app.localFile = true;
 
-                    // Parse the MIDI file
+                    // Parse the MIDI file using midi.js library
                     this.parseMidiFile(new Midi(e.target.result));
                     
-                    // Set play button active through transport
+                    // Enable playback controls
                     Utils.setPlayButtonActive(true);
                 };
                 reader.readAsArrayBuffer(load);
@@ -138,27 +176,33 @@ class MidiManager {
         });
     }
 
+    /**
+     * Parses a MIDI file and sets up the application for playback
+     * Extracts tempo, duration, and schedules events for playback
+     * @param {Object} midiData - Parsed MIDI data from midi.js
+     */
     parseMidiFile(midiData) {
-        // Clear previous controls
+        // Clear previous channel controls
         document.getElementById("file_controls").innerHTML = "";
         
-        // Update app state
+        // Update application state
         const state = this.app.state;
         this.app.midiFileRead = true;
         this.app.track_duration = midiData.duration;
         state.speed = 1.0;
         
-        // Get BPM from MIDI file if present
+        // Extract BPM from MIDI file header
         if (midiData.header.tempos.length > 0) {
             this.app.bpm = midiData.header.tempos[0]["bpm"];
         } else {
+            // Default to 120 BPM if no tempo information
             this.app.bpm = 120.0;
         }
         
-        // Update Tone.js transport
+        // Synchronize Tone.js transport with file tempo
         Tone.Transport.bpm.value = this.app.bpm;
 
-        // Set playback speed through transport module
+        // Reset playback speed to normal
         const transport = this.app.modules.transport;
         if (transport) {
             transport.setSpeed(1.0);
@@ -166,7 +210,7 @@ class MidiManager {
             console.error("Transport module not found, cannot set playback speed.");
         }
         
-        // Update MIDI file name display
+        // Update MIDI file name display in UI
         const midiFileName = document.getElementById("midiFileName");
         if (midiFileName) {
             if (midiData.header.name) {
@@ -176,143 +220,199 @@ class MidiManager {
             }
         }
         
-        // Schedule MIDI events through transport module
+        // Schedule all MIDI events for playback through transport
         if (transport && !(midiData === this.file)) {
-            this.file = midiData; // Store the file reference
+            this.file = midiData; // Store reference to avoid re-processing
             transport.scheduleMIDIEvents(midiData);
         } else {
             console.error("Transport module not found, cannot schedule MIDI events.");
         }
     }
 
+    /**
+     * Handles changes to MIDI output device selection
+     * Sends all notes off when switching to prevent hanging notes
+     * @param {Array<MIDIOutput>} midiOutputs - Available MIDI output devices
+     */
     handleOutputChange(midiOutputs) {
         if (!this.midioutPort) {
-            // Send all notes off for WebAudioFont
+            // Switching from WebAudioFont - stop all internal synthesis
             setTimeout(() => {
                 for (const note of this.midiNotes) {
                     this.app.modules.audioEngine.handleNoteOff(note.channel, { midi: note.pitch });
                 }
             }, 500);
         } else {
-            // Send all notes off for external MIDI devices
+            // Switching from external device - send MIDI all notes off
             for (let channel = 0; channel < 12; channel++) {
-                this.midioutPort.send([0xB0 + channel, 120, 0]);
+                this.midioutPort.send([0xB0 + channel, 120, 0]); // CC 120 = All Notes Off
             }
         }
 
+        // Set new output port
         this.midioutPort = midiOutputs[this.midiOutputsSelect.value];
         if (this.midioutPort) {
             this.midioutPort.onmidimessage = (message) => this.onMidiOutMessage(message);
-            // console.log("Selected MIDI output:", this.midioutPort.name);
         }
     }
 
+    /**
+     * Handles MIDI access failure and updates UI accordingly
+     * @param {string|Error} msg - Error message or error object
+     */
     onMIDIFailure(msg) {
         document.getElementById("midiIn").innerHTML = "No extern MIDI available.";
         document.getElementById("midiOut").innerHTML = "";
         console.warn(`Failed to get MIDI access - ${msg}`);
     }
 
+    /**
+     * Handles MIDI messages from input devices
+     * @param {MIDIMessageEvent} message - MIDI message event from input device
+     */
     onMIDIMessage(message) {
         this.onMidiOutMessage(message.data);
     }
 
+    /**
+     * Routes MIDI messages to appropriate output (external device or WebAudioFont)
+     * @param {Uint8Array|Array<number>} message - Raw MIDI message bytes
+     */
     onMidiOutMessage(message) {
         if (!this.noMidi && this.midiOutputsSelect.selectedIndex !== 0) {
-            // External MIDI
+            // Route to external MIDI device
             try {
                 this.midioutPort.send(message);
-                // console.log("MIDI out message:", message, "to port:", this.midioutPort.name);
             } catch (error) {
                 console.error("Error sending MIDI message:", error);
             }
         } else {
+            // Route to internal WebAudioFont synthesis
             this.handleWebAudioFontMessage(message);
         }
     }
 
+    /**
+     * Processes MIDI messages for internal WebAudioFont synthesis
+     * Decodes MIDI message types and routes to appropriate handlers
+     * @param {Uint8Array|Array<number>} message - Raw MIDI message bytes
+     */
     handleWebAudioFontMessage(message) {
         if (this.noMidi || (this.midiOutputsSelect && this.midiOutputsSelect.selectedIndex === 0)) {
-            const channel = message[0] & 0x0F;
+            const channel = message[0] & 0x0F; // Extract channel from status byte
             const audioEngine = this.app.modules.audioEngine;
 
+            // Decode MIDI message type from status byte
             if (message[0] >= 0x80 && message[0] < 0x90 && channel !== 9) {
-                // Note off
+                // Note off (0x80-0x8F, excluding drum channel)
                 audioEngine.handleNoteOff(channel, { midi: message[1] });
             } else if (message[0] >= 0x90 && message[0] < 0xA0) {
-                // Note on/off
+                // Note on/off (0x90-0x9F)
                 if (message[2] === 0 && channel !== 9) {
+                    // Velocity 0 = note off (common MIDI practice)
                     audioEngine.handleNoteOff(channel, { midi: message[1] });
                 } else {
+                    // True note on with velocity
                     audioEngine.handleNoteOnForChannel({ midi: message[1] }, message[2] / 127, channel);
                 }
             } else if (message[0] >= 0xB0 && message[0] < 0xC0) {
-                // Control change
+                // Control change (0xB0-0xBF)
                 this.handleControlChange(message, channel);
             } else if (message[0] >= 0xC0 && message[0] < 0xD0) {
-                // Program change
+                // Program change (0xC0-0xCF)
                 this.handleProgramChange(message, channel);
             } else if (message[0] >= 0xE0 && message[0] < 0xF0) {
-                // Pitch bend
+                // Pitch bend (0xE0-0xEF)
                 this.handlePitchBend(message, channel);
             }
         }
     }
 
+    /**
+     * Processes MIDI control change messages
+     * Handles volume, pan, reverb send, sustain pedal, and all notes off
+     * @param {Array<number>} message - MIDI control change message [status, controller, value]
+     * @param {number} channel - MIDI channel number (0-15)
+     */
     handleControlChange(message, channel) {
         const audioEngine = this.app.modules.audioEngine;
         
         if (message[1] === 120) {
-            // All notes off
+            // CC 120: All Notes Off - emergency stop for all notes
             for (const note of this.midiNotes) {
                 audioEngine.handleNoteOff(note.channel, { midi: note.pitch });
             }
         } else if (message[1] === 7) {
-            // Volume
+            // CC 7: Main Volume
             this.handleControlSettingFromFile(channel, "volume", message[2] / 127);
         } else if (message[1] === 10) {
-            // Pan
+            // CC 10: Pan Position (center = 64, converted to -1 to +1 range)
             this.handleControlSettingFromFile(channel, "pan", (message[2] - 64) / 64);
         } else if (message[1] === 91) {
-            // Reverb send
+            // CC 91: Reverb Send Level
             this.handleControlSettingFromFile(channel, "reverb", message[2] / 127);
         } else if (message[1] === 64) {
-            // Sustain pedal
+            // CC 64: Sustain Pedal (0-63 = off, 64-127 = on)
             this.handleSustainPedal(message[2], channel);
         }
     }
 
+    /**
+     * Handles control changes that originate from MIDI file data
+     * Updates UI controls and audio parameters while respecting user overrides
+     * @param {number} channel - MIDI channel number
+     * @param {string} setting - Setting name ("volume", "pan", "reverb")
+     * @param {number} value - Normalized control value (0.0-1.0)
+     */
     handleControlSettingFromFile(channel, setting, value) {
         const settingsManager = this.app.modules.settingsManager;
         
+        // Schedule UI updates on the main thread
         Tone.Draw.schedule(() => {
             const slider = settingsManager.setResettable(channel, setting, value, "slider");
             
+            // Check if user has manually overridden this setting
             if (slider === null || this.isUserSettingOverride(channel, slider.id)) {
                 console.warn("User setting overrides channel:", channel, "setting:", setting, "value:", value);
                 return;
             }
 
+            // Apply the control change to audio processing
             this.updateControlNode(channel, setting, value);
+            // Update the UI slider and label
             this.updateSliderAndLabel(slider, setting, value, channel);
         }, Tone.now());
     }
 
+    /**
+     * Checks if a user has manually overridden a setting
+     * @param {number} channel - MIDI channel number
+     * @param {string} sliderId - DOM ID of the slider element
+     * @returns {boolean} True if user has overridden this setting
+     */
     isUserSettingOverride(channel, sliderId) {
         const userSettings = this.app.state.userSettings;
         return userSettings.channels[channel] !== undefined && 
                userSettings.channels[channel][sliderId];
     }
 
+    /**
+     * Updates the actual audio processing node with new control value
+     * @param {number} channel - MIDI channel number
+     * @param {string} setting - Setting name ("volume", "pan", "reverb")
+     * @param {number} value - Control value to apply
+     */
     updateControlNode(channel, setting, value) {
         const audioEngine = this.app.modules.audioEngine;
         
         if (channel === 9) {
+            // Handle drum channel (special case)
             const drumInstrument = audioEngine.getDrumInstrument();
             const controlNode = (setting === "volume") ? 
                 drumInstrument.gainNode.gain : drumInstrument.panNode.pan;
             controlNode.value = value;
         } else {
+            // Handle regular instrument channels
             const instrument = audioEngine.getChannelInstrument(channel);
             if (instrument) {
                 let controlNode;
@@ -328,8 +428,18 @@ class MidiManager {
         }
     }
 
+    /**
+     * Updates the UI slider position and label text to reflect current value
+     * @param {HTMLElement} slider - Slider DOM element
+     * @param {string} setting - Setting name for label formatting
+     * @param {number} value - Current control value
+     * @param {number} channel - MIDI channel number
+     */
     updateSliderAndLabel(slider, setting, value, channel) {
+        // Convert normalized value back to slider range (pan stays -1 to +1, others 0-127)
         slider.value = (setting === "pan") ? value : value * 127;
+        
+        // Update the corresponding label
         const labelId = setting + "_label_" + ((channel !== 9) ? channel : "drum");
         const label = document.getElementById(labelId);
         
@@ -339,15 +449,22 @@ class MidiManager {
         }
     }
 
+    /**
+     * Handles sustain pedal (damper pedal) control changes
+     * Manages note sustain and release based on pedal state
+     * @param {number} value - MIDI control value (0-127)
+     * @param {number} channel - MIDI channel number
+     */
     handleSustainPedal(value, channel) {
         if (value > 0) {
+            // Pedal pressed - enable sustain for this channel
             this.sustain.set(channel, true);
         } else {
-            // Only cancel sustained nodes for this specific channel
+            // Pedal released - release all sustained notes for this channel
             for (const [key, node] of this.sustainedNodes.entries()) {
                 const [nodeChannel, pitch] = key.split('-').map(Number);
                 if (nodeChannel === channel) {
-                    node.cancel();
+                    node.cancel(); // Stop the sustained note
                     this.sustainedNodes.delete(key);
                 }
             }
@@ -355,33 +472,53 @@ class MidiManager {
         }
     }
 
+    /**
+     * Handles MIDI program change messages to switch instruments
+     * Updates UI controls and loads new instruments as needed
+     * @param {Array<number>} message - MIDI program change message [status, program]
+     * @param {number} channel - MIDI channel number
+     */
     handleProgramChange(message, channel) {
         const settingsManager = this.app.modules.settingsManager;
         
+        // Schedule UI updates on the main thread
         Tone.Draw.schedule(() => {
-            if (channel === 9) return; // No program change on drum channel
+            if (channel === 9) return; // No program change on GM drum channel
             
+            // Set up resettable program change control
             const select = settingsManager.setResettable(channel, "instrumentSelect_" + channel, message[1], "select");
             
+            // Check for user override
             if (select === null || this.isUserSettingOverride(channel, select.id)) {
                 console.warn("Program user setting overrides channel:", channel, "value:", message[1]);
                 return;
             }
             
+            // Update UI and trigger instrument change if needed
             if (select.selectedIndex !== message[1]) {
                 select.selectedIndex = message[1];
-                select.classList.add("fromFile");
+                select.classList.add("fromFile"); // Mark as coming from file (not user input)
                 select.dispatchEvent(new Event('change'));
             }
         }, Tone.now());
     }
 
+    /**
+     * Handles MIDI pitch bend messages for expressive pitch control
+     * Applies pitch bend to all currently playing notes on the channel
+     * @param {Array<number>} message - MIDI pitch bend message [status, LSB, MSB]
+     * @param {number} channel - MIDI channel number
+     */
     handlePitchBend(message, channel) {
+        // Reconstruct 14-bit pitch bend value from LSB and MSB
         const pitchBendValue = (message[2] << 7) | message[1];
+        // Normalize to -1.0 to +1.0 range (8192 = center/no bend)
         const normalizedBend = (pitchBendValue - 8192) / 8192;
+        // Standard pitch bend range is ±2 semitones
         const pitchBendRange = 2;
         const bendInSemitones = normalizedBend * pitchBendRange;
         
+        // Apply pitch bend to all currently playing notes on this channel
         const channelNotes = this.midiNotes.filter(note => note.channel === channel);
         const audioEngine = this.app.modules.audioEngine;
         
@@ -390,8 +527,11 @@ class MidiManager {
         }
     }
 
+    /**
+     * Sends all notes off and all sound off messages to stop all audio
+     * Used for emergency stops and when switching between files
+     */
     sendEvent_allNotesOff() {
-        // Send all notes off using the audio engine instead of loader
         const audioEngine = this.app.modules.audioEngine;
         
         if (!audioEngine) {
@@ -399,12 +539,12 @@ class MidiManager {
             return;
         }
         
-        // Turn off all currently playing notes
+        // Stop all currently playing notes via WebAudioFont
         for (const note of this.midiNotes) {
             audioEngine.handleNoteOff(note.channel, { midi: note.pitch });
         }
         
-        // Send MIDI all notes off control change messages for all channels
+        // Send MIDI control change messages for all channels
         for (let channel = 0; channel < 16; channel++) {
             const allNotesOffMessage = [0xB0 + channel, 120, 0]; // CC 120 = All Notes Off
             this.onMidiOutMessage(allNotesOffMessage);
@@ -413,10 +553,14 @@ class MidiManager {
             this.onMidiOutMessage(allSoundOffMessage);
         }
         
-        // Clear the midi notes array
+        // Clear internal note tracking
         this.clearMidiNotes();
     }
 
+    /**
+     * Sends sustain pedal off messages for all channels
+     * Releases all sustained notes and clears sustain state
+     */
     sendEvent_sustainPedalOff() {
         for (let channel = 0; channel < 16; channel++) {
             if (this.noMidi || (this.midiOutputsSelect && this.midiOutputsSelect.selectedIndex === 0)) {
@@ -429,36 +573,64 @@ class MidiManager {
         }
     }
     
+    /**
+     * Adds a MIDI note to the active notes tracking
+     * @param {Object} note - Note object with channel, pitch, and envelope
+     */
     addMidiNote(note) {
         this.midiNotes.push(note);
     }
 
+    /**
+     * Removes a specific MIDI note from active tracking
+     * @param {number} channel - MIDI channel number
+     * @param {number} pitch - MIDI note number
+     */
     removeMidiNote(channel, pitch) {
         this.midiNotes = this.midiNotes.filter(note => 
             !(note.channel === channel && note.pitch === pitch)
         );
     }
 
+    /**
+     * Gets the current sustain pedal state for a channel
+     * @param {number} channel - MIDI channel number
+     * @returns {boolean} True if sustain pedal is pressed
+     */
     getSustainState(channel) {
         return this.sustain.get(channel);
     }
 
+    /**
+     * Stores a note envelope that should be sustained until pedal release
+     * @param {number} channel - MIDI channel number
+     * @param {number} pitch - MIDI note number
+     * @param {Object} envelope - WebAudioFont envelope object
+     */
     setSustainedNode(channel, pitch, envelope) {
         const key = `${channel}-${pitch}`;
         this.sustainedNodes.set(key, envelope);
     }
 
+    /**
+     * Gets the set of channels currently in solo mode
+     * @returns {Set<number>} Set of soloed channel numbers
+     */
     getSoloChannels() {
         return this.soloChannels;
     }
 
+    /**
+     * Clears all tracked MIDI notes
+     */
     clearMidiNotes() {
         this.midiNotes = [];
     }
 
-    // Aliases for compatibility with main.js calls
-    
-
+    /**
+     * Alias for onMIDIMessage for compatibility with other modules
+     * @param {MIDIMessageEvent|Object} message - MIDI message to handle
+     */
     handleMIDIMessage(message) {
         return this.onMIDIMessage(message);
     }
@@ -468,4 +640,3 @@ class MidiManager {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = MidiManager;
 }
-
