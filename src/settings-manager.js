@@ -9,9 +9,36 @@ class SettingsManager {
     constructor(app) {
         this.app = app;
         this.debouncedUpdateUserSettings = Utils.debounce(this.updateUserSettings.bind(this), 300);
+        this.shareThisLoaded = false;
     }
 
     async init() {
+    }
+
+    loadModule() {
+        return new Promise((resolve, reject) => {
+            if (this.shareThisLoaded) {
+                resolve();
+                return;
+            }
+
+            const script = document.createElement('script');
+            script.src = 'https://platform-api.sharethis.com/js/sharethis.js#property=672a9419d01e2b00125529f4&product=sop';
+            script.async = true;
+            
+            script.onload = () => {
+                this.shareThisLoaded = true;
+                resolve();
+            };
+            
+            script.onerror = () => {
+                console.warn('Failed to load ShareThis module');
+                this.shareThisLoaded = false;
+                resolve(); // Don't reject, just continue without ShareThis
+            };
+            
+            document.head.appendChild(script);
+        });
     }
 
     updateUserSettings(key, value, channel) {
@@ -167,7 +194,7 @@ class SettingsManager {
             if (this.app.modules.midiManager?.midiInputs?.length > 0) {
                 // TODO: Load default piano sound and create Controls
                 console.log("Loading default: piano");
-                const audioEngine = app?.modules.audioEngine;
+                const audioEngine = this.app?.modules.audioEngine;
                 audioEngine?.loadInstrumentsForProgramChange(0, 0, 0, "Piano");
             }
         }
@@ -184,34 +211,39 @@ class SettingsManager {
     }
 
     share() {
-        const baseUrl = window.location.href.split('?')[0];
-    
-        // Flatten the state structure for URL parameters
-        const urlParams = { ...this.app.state };
+        return new Promise(async (resolve) => {
+            // Load ShareThis module if not already loaded
+            await this.loadModule();
 
-        // Move channels from userSettings.channels to top-level channels
-        if (this.app.state.userSettings && this.app.state.userSettings.channels) {
-            urlParams.channels = this.app.state.userSettings.channels;
-        }
+            const baseUrl = window.location.href.split('?')[0];
         
-        // Remove userSettings from URL params since we've extracted what we need
-        delete urlParams.userSettings;
+            // Flatten the state structure for URL parameters
+            const urlParams = { ...this.app.state };
 
-        const shareUrl = Utils.generateShareUrl(baseUrl, urlParams);
-        
-        Utils.updateShareUrl(shareUrl);
+            // Move channels from userSettings.channels to top-level channels
+            if (this.app.state.userSettings && this.app.state.userSettings.channels) {
+                urlParams.channels = this.app.state.userSettings.channels;
+            }
+            
+            // Remove userSettings from URL params since we've extracted what we need
+            delete urlParams.userSettings;
 
-        const shares = document.getElementById("st-1")
-        if (shares) {
-            shares.style.display = "block";
-        }
-        document.getElementById("hiddenShareButton").style.display = "block";
+            const shareUrl = Utils.generateShareUrl(baseUrl, urlParams);
+            
+            Utils.updateShareUrl(shareUrl);
 
-        return shareUrl;
+            const shares = document.getElementById("st-1")
+            if (shares) {
+                shares.style.display = "block";
+            }
+            document.getElementById("hiddenShareButton").style.display = "block";
+
+            resolve(shareUrl);
+        });
     }
 
-    shareAndCopy() {
-        const shareUrl = this.share();
+    async shareAndCopy() {
+        const shareUrl = await this.share();
         navigator.clipboard.writeText(shareUrl).then(() => {
             alert("Note: Please only share examples that are your own work or come from the public domain. Do NOT share copyrighted music without permission. \n\nThe share URL is copied to clipboard.");
         }).catch(err => {

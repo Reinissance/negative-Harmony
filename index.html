@@ -9,77 +9,36 @@
   <!-- Generated javascript library includes -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
-  <script type='text/javascript' src='https://platform-api.sharethis.com/js/sharethis.js#property=672a9419d01e2b00125529f4&product=sop' async='async'></script>
   
   <!-- New Modular System -->
-  <script type="application/javascript" src="./src/utils.js"></script>
   <script type="application/javascript" src="./src/app.js"></script>
   
-  <!-- Legacy System (maintained for fallback safety) -->
-  <script type="application/javascript" src="./main.js"></script>
   <script> 
-    // initialize tooltips
-    document.addEventListener('DOMContentLoaded', function () {
-      var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-toggle="tooltip"]'))
-      var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl)
-      })
-      fetch("examples.json")
-        .then(response => response.json())
-        .then(data => {
-          const container = document.getElementById("examples");
-          container.innerHTML = ""; // Clear previous content
+    // Global app instance for backward compatibility
+    let app;
 
-            const list = document.createElement("ul");
-
-            for (const artist in data) {
-              const artistItem = document.createElement("li");
-              const artistHeader = document.createElement("h4");
-              artistHeader.textContent = artist + ":";
-              artistItem.appendChild(artistHeader);
-
-              const songList = document.createElement("ol");
-
-              for (const song in data[artist]) {
-                const songItem = document.createElement("li");
-                const link = document.createElement("a");
-
-                link.href = "javascript:void(0);";
-                link.onclick = function() {
-                  try {
-                    const scoreFollower = app.modules.scoreManager;
-                    if (scoreFollower && scoreFollower.scoreShown) {
-                      scoreFollower.hideScore();
-                    }
-                    
-                    // Ensure transport is properly cleaned before loading new content
-                    app.modules.transport.preclean();
-                    
-                    // Add a small delay to ensure cleanup is complete
-                    setTimeout(() => {
-                      const settingsManager = app.modules.settingsManager;
-                      settingsManager.checkForParamsInUrl(new URL(data[artist][song]).searchParams);
-                    }, 100);
-                    
-                  } catch (error) {
-                    console.error('Error loading example:', error);
-                    Utils.showError('Failed to load example: ' + error.message);
-                  }
-                };
-                link.textContent = song;
-
-                songItem.appendChild(link);
-                songList.appendChild(songItem);
-              }
-
-              artistItem.appendChild(songList);
-              list.appendChild(artistItem);
-            }
-
-            container.appendChild(list);
-        })
-        .catch(error => console.error("Error loading examples:", error));
+    // Initialize when DOM is ready
+    document.addEventListener('DOMContentLoaded', async function () {
+      try {
+        // Initialize the modular app system
+        if (typeof NegativeHarmonyApp !== 'undefined') {
+          app = new NegativeHarmonyApp();
+          await app.init();
+          app.moduleLoaded();
+        }
+      } catch (error) {
+        console.error('Failed to initialize app:', error);
+      }
     });
+
+    // Global functions for backward compatibility
+    function toggleTransport(element) {
+      if (app) app.toggleTransport(element);
+    }
+
+    function reloadWithUrl() {
+      if (app) app.reloadWithUrl();
+    }
   </script>
   <link rel="stylesheet" href="style.css">  
 </head>

@@ -50,14 +50,14 @@ class NegativeHarmonyApp {
             // Initialize modules after everything is loaded
             this.initializeModules();
             
+            // Initialize UI components
+            this.initializeUI();
+            
             this.initialized = true;
             console.log('Negative Harmony App initialized successfully');
             
-            app.start().then(async () => {
-                var startPrompt = document.getElementById("start_prompt");
-                startPrompt.hidden = true;
-                document.getElementById("col_transport").style = "";
-            });
+            // Make app globally available
+            window.app = this;
             
         } catch (error) {
             console.error('Failed to initialize app:', error);
@@ -65,29 +65,32 @@ class NegativeHarmonyApp {
         }
     }
 
-    loadLibraries() {
+    async loadLibraries() {
+        try {
+            // Load utilities first as other modules depend on it
+            await this.loadScript('./src/utils.js');
+            
+            // Load other libraries
+            await this.loadScript('https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js');
+            await this.loadScript('https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js');
+            await this.loadScript('https://unpkg.com/@tonejs/midi@2.0.24');
+            
+        } catch (error) {
+            console.error('Error loading libraries:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Helper method to load external scripts
+     */
+    loadScript(src) {
         return new Promise((resolve, reject) => {
-            const libraries = [
-            'https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js',
-            'https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js',
-            'https://unpkg.com/@tonejs/midi@2.0.24'
-            ];
-
-            let loadedCount = 0;
-            const totalLibraries = libraries.length;
-
-            libraries.forEach(src => {
             const script = document.createElement('script');
             script.src = src;
-            script.onload = () => {
-                loadedCount++;
-                if (loadedCount === totalLibraries) {
-                resolve();
-                }
-            };
-            script.onerror = () => reject(new Error(`Failed to load library: ${src}`));
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
             document.head.appendChild(script);
-            });
         });
     }
 
@@ -374,6 +377,131 @@ class NegativeHarmonyApp {
         this.modules.midiManager.sendEvent_allNotesOff();
         this.modules.settingsManager.debouncedUpdateUserSettings("perOktave", intValue, -1);
     }
+
+    // Methods moved from inline JavaScript in index.html
+    
+    moduleLoaded() {
+        document.getElementById("transportButton").style.visibility = "visible";
+        const toggler = document.getElementsByClassName("st-toggle")[0];
+        if (toggler)
+            toggler.style.display = "none";
+    }
+
+    toggleTransport(element) {
+        this.start();
+        var transportButton = document.getElementById("transportButton");
+        transportButton.style.display = "none";
+        // hide the label too
+        var transportLabel = document.getElementById("transportLabel");
+        transportLabel.style.display = "none";
+    }
+
+    reloadWithUrl() {
+        const midiFileUrl = document.getElementById("midiUrl").value;
+        if (midiFileUrl) {
+            if (!midiFileUrl.endsWith(".mid") && !midiFileUrl.endsWith(".midi")) {
+                // delegate to BitMidiSearch module
+                if (window.BitMidiSearch) {
+                    window.BitMidiSearch.search(midiFileUrl, 0);
+                }
+                return;
+            }
+            Utils.setPlayButtonActive(false);
+            this.state.midiFileUrl = midiFileUrl;
+            fetch(midiFileUrl)
+                .then(response => response.arrayBuffer())
+                .then(data => {
+                    this.localFile = false;
+                    this.modules.transport.preclean();
+                    this.modules.transport.cleanup();
+                    this.modules.midiManager.parseMidiFile(new Midi(data));
+                    this.modules.settingsManager.share();
+                    this.state.midiFile = midiFileUrl;
+                    document.getElementById("midiUrl").value = midiFileUrl;
+                    Utils.setPlayButtonActive(true);
+                    const settingsManager = this.modules.settingsManager;
+                    settingsManager.share();
+                })
+                .catch(error => {
+                    console.log(error);
+                    alert('Error fetching MIDI file: ' + error);
+                });
+        }
+    }
+
+    // Initialize UI components like tooltips and examples
+    initializeUI() {
+        // Initialize Bootstrap tooltips
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-toggle="tooltip"]'))
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl)
+        });
+
+        // Load examples
+        this.loadExamples();
+
+        // Initialize BitMidiSearch module
+        window.BitMidiSearch?.init();
+    }
+
+    loadExamples() {
+        fetch("examples.json")
+            .then(response => response.json())
+            .then(data => {
+                const container = document.getElementById("examples");
+                container.innerHTML = ""; // Clear previous content
+
+                const list = document.createElement("ul");
+
+                for (const artist in data) {
+                    const artistItem = document.createElement("li");
+                    const artistHeader = document.createElement("h4");
+                    artistHeader.textContent = artist + ":";
+                    artistItem.appendChild(artistHeader);
+
+                    const songList = document.createElement("ol");
+
+                    for (const song in data[artist]) {
+                        const songItem = document.createElement("li");
+                        const link = document.createElement("a");
+
+                        link.href = "javascript:void(0);";
+                        link.onclick = () => {
+                            try {
+                                const scoreFollower = this.modules.scoreManager;
+                                if (scoreFollower && scoreFollower.scoreShown) {
+                                    scoreFollower.hideScore();
+                                }
+                                
+                                // Ensure transport is properly cleaned before loading new content
+                                this.modules.transport.preclean();
+                                
+                                // Add a small delay to ensure cleanup is complete
+                                setTimeout(() => {
+                                    const settingsManager = this.modules.settingsManager;
+                                    settingsManager.checkForParamsInUrl(new URL(data[artist][song]).searchParams);
+                                }, 100);
+                                
+                            } catch (error) {
+                                console.error('Error loading example:', error);
+                                Utils.showError('Failed to load example: ' + error.message);
+                            }
+                        };
+                        link.textContent = song;
+
+                        songItem.appendChild(link);
+                        songList.appendChild(songItem);
+                    }
+
+                    artistItem.appendChild(songList);
+                    list.appendChild(artistItem);
+                }
+
+                container.appendChild(list);
+            })
+            .catch(error => console.error("Error loading examples:", error));
+    }
+
 }
 
 // Export for module usage

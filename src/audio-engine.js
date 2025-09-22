@@ -234,37 +234,6 @@ class AudioEngine {
         }
     }
 
-    // onchangeForChannel(event, channel) {
-    //     this.loadInstrumentsForProgramChange(channel, event.target.selectedIndex, 0, event.target.options[event.target.selectedIndex].text);
-        
-    //     // Update options for the soundfont select
-    //     let select = document.getElementById("sfIndex_" + channel);
-    //     select.innerHTML = "";
-    //     this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).urls.forEach((name, i) => {
-    //         let option = document.createElement("option");
-    //         option.value = i;
-    //         option.text = name;
-    //         select.appendChild(option);
-    //     });
-        
-    //     let preset = this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).urls[0];
-    //     this.availableInstrumentsForProgramChange.get(event.target.selectedIndex).preset = "_tone_" + preset;
-    //     this.loadedChannelInstruments.get(channel).preset = "_tone_" + preset;
-    //     this.loadedChannelInstruments.get(channel).programNumber = event.target.selectedIndex;
-        
-    //     if (!event.target.classList.contains("fromFile")) {
-    //         // Update settings through the settings manager
-    //         const settingsManager = this.app.modules.settingsManager;
-    //         if (settingsManager) {
-    //             settingsManager.debouncedUpdateUserSettings(event.target.id, event.target.value, channel);
-    //             settingsManager.showResetButtonIfNeeded(channel);
-    //         }
-    //     } else {
-    //         // Remove "fromFile" class
-    //         event.target.classList.remove("fromFile");
-    //     }
-    // }
-
     // Getters for other modules
     getDrumInstrument() {
         return this.drumInstrument;
