@@ -211,6 +211,48 @@ class ScoreManager {
             // Clean up the output - remove everything before the first X: header
             abcOutput = abcOutput.replace(/^[\s\S]*?(?=^X:)/m, '');
 
+            // New: inject track names from the provided midiFile into V: headers as nm and snm
+            try {
+                if (midiFile && Array.isArray(midiFile.tracks) && midiFile.tracks.length > 0 && abcOutput.includes('\nV:')) {
+                    const abcLines = abcOutput.split('\n');
+                    // collect indices of lines that start with V:
+                    const vLineIndices = [];
+                    for (let i = 0; i < abcLines.length; i++) {
+                        if (/^\s*V:/.test(abcLines[i])) vLineIndices.push(i);
+                    }
+
+                    const tracks = midiFile.tracks || [];
+                    const max = Math.min(vLineIndices.length, tracks.length);
+
+                    for (let i = 0; i < max; i++) {
+                        const track = tracks[i];
+                        const lineIdx = vLineIndices[i];
+                        if (!track || !track.name || !track.name.toString().trim()) continue;
+
+                        let line = abcLines[lineIdx];
+
+                        // don't overwrite if already contains nm or snm
+                        if (/\bnm=|\bsnm=/.test(line)) continue;
+
+                        // sanitize name and build shortname
+                        const fullName = track.name.toString().trim().replace(/"/g, "'");
+                        // shortName: if name is <=3 chars use it as-is, otherwise use first char + last two chars
+                        let shortName;
+                        if (fullName.length <= 3) {
+                            shortName = fullName;
+                        } else {
+                            shortName = fullName.charAt(0) + fullName.slice(-2);
+                        }
+
+                        abcLines[lineIdx] = `${line} nm="${fullName}" snm="${shortName}"`;
+                    }
+
+                    abcOutput = abcLines.join('\n');
+                }
+            } catch (e) {
+                console.warn('Failed to inject voice names into ABC:', e);
+            }
+
             // Store the result and calculate total bars
             this.abcString = abcOutput;
             this.totalBars = this.getTotalBarsFromABC();
