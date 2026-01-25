@@ -266,6 +266,58 @@ class ScoreManager {
     }
 
     /**
+     * Parses the time signature (M:) from the ABC string
+     * @param {string|null} abcString - ABC notation string (uses stored string if null)
+     * @returns {[number, number]} Time signature as [numerator, denominator]
+     */
+    getTimeSignatureFromABC(abcString = null) {
+        const abc = (abcString || this.abcString || '').trim();
+        if (!abc) return [4, 4]; // default fallback
+
+        // Look for M: in header (meter), e.g. M:4/4 or M:6/8
+        const match = abc.match(/^M:\s*([0-9]+)\s*\/\s*([0-9]+)/m);
+        if (match) {
+            const num = parseInt(match[1], 10) || 4;
+            const den = parseInt(match[2], 10) || 4;
+            return [num, den];
+        }
+
+        // Fallback to common time if not found
+        return [4, 4];
+    }
+
+    /**
+     * Syncs Tone.Transport.timeSignature to the ABC time signature
+     * Retries a few times if the ABC string isn't immediately available
+     * @param {number} retries - Number of retries (default: 5)
+     * @param {number} delayMs - Delay between retries in milliseconds (default: 200)
+     */
+    syncToneTimeSignatureFromABC(retries = 5, delayMs = 200) {
+        const attempt = (remaining) => {
+            const ts = this.getTimeSignatureFromABC();
+            // If abcString is still empty and we have retries, wait and retry
+            if ((!this.abcString || !this.abcString.trim()) && remaining > 0) {
+                setTimeout(() => attempt(remaining - 1), delayMs);
+                return;
+            }
+
+            try {
+                if (window.Tone && window.Tone.Transport && Array.isArray(ts) && ts.length === 2) {
+                    // Apply the parsed time signature to Tone.Transport
+                    window.Tone.Transport.timeSignature = ts;
+                    // Also ensure transport's internal timeSignature property is in sync
+                    // (some versions use .timeSignature directly as array)
+                }
+            } catch (e) {
+                // silent fail - don't break app flow
+                console.warn('Failed to sync Tone time signature from ABC:', e);
+            }
+        };
+
+        attempt(retries);
+    }
+
+    /**
      * Displays an error modal when ABC generation fails
      * @param {string} errorMessage - Error message to display
      */
@@ -532,7 +584,7 @@ class ScoreManager {
         const accidentals = this.getKeySignatureAccidentals(keySignature);
         
         // Extract note components using regex
-        const noteMatch = noteString.match(/^(\^*|_*|=*)([A-Ga-g])([#b]*)([',]*)/);
+        const noteMatch = noteString.match(/^(\^*|_+|=*)([A-Ga-g])([#b]*)([',]*)/);
         if (!noteMatch) {
             return noteString;
         }
@@ -695,7 +747,7 @@ class ScoreManager {
             
             // Replace ONLY note patterns with percussion symbols, preserving ALL other characters
             // This regex will match notes but the replacement function will preserve everything else
-            let processedLine = cleanLine.replace(/(\^*|_*|=*)([A-Ga-g])([#b]*)([',]*)/g, (match, accidental, note, symbols, octaveModifier) => {
+            let processedLine = cleanLine.replace(/(\^*|_+|=*)([A-Ga-g])([#b]*)([',]*)/g, (match, accidental, note, symbols, octaveModifier) => {
                 const originalNote = match;
                 
                 // First normalize the note to apply key signature effects
@@ -1675,6 +1727,9 @@ class ScoreManager {
         
         this.showMidiScore(useScoreFollowing);
         
+        // Sync Tone.js time signature to the ABC score (retry if ABC not yet ready)
+        this.syncToneTimeSignatureFromABC();
+
         // Add manual controls
         this.addScoreFollowerControls(scoreContainer);
     }
