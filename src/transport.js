@@ -782,8 +782,13 @@ class Transport {
      * @param {Object} midi - MIDI file object to schedule
      */
     scheduleMIDIEvents(midi) {
-        // Align MIDI to start at first beat of first musical bar for better score sync
-        this.originalMidi = this.alignMidiToFirstMusicalBar(midi);
+        // If a manual shift was applied previously, use the midi as-is.
+        // Otherwise align MIDI to start at first beat of first musical bar for better score sync
+        if (midi && midi._manualShiftApplied) {
+            this.originalMidi = midi;
+        } else {
+            this.originalMidi = this.alignMidiToFirstMusicalBar(midi);
+        }
         
         // Store alignment info for score following
         this.firstMusicalBar = { ticks: 0, time: 0, method: 'aligned' };
@@ -1559,6 +1564,149 @@ class Transport {
             
             return null;
         }
+    }
+
+    /**
+     * Apply a manual shift to the currently loaded MIDI by a number of steps of a rhythmic unit.
+     * @param {number} steps - Number of units to shift (positive = forward/delay, negative = backward/advance)
+     * @param {string|number} unit - Unit denominator as string/number: "16","8","4" (sixteenth, eighth, quarter)
+     */
+    adjustScoreStart(steps, unit) {
+        const midi = this.originalMidi;
+        if (!midi) {
+            console.warn('adjustScoreStart: no MIDI loaded to adjust');
+            return;
+        }
+
+        const ppq = midi.header?.ppq || 96;
+        const timeSignature = midi.header?.timeSignatures?.[0]?.timeSignature || [4, 4];
+        const denominator = timeSignature[1] || 4;
+        const ticksPerBeat = ppq * (4 / denominator);
+
+        let unitTicks;
+        const unitStr = String(unit);
+        if (unitStr === '16') {
+            unitTicks = Math.round(ticksPerBeat / 4);
+        } else if (unitStr === '8') {
+            unitTicks = Math.round(ticksPerBeat / 2);
+        } else {
+            unitTicks = Math.round(ticksPerBeat); // quarter by default
+        }
+
+        const ticksDelta = steps * unitTicks;
+        // Apply shift in place and reschedule
+        this.applyManualShiftToMidi(midi, ticksDelta);
+
+        // Reschedule playback using the manually-shifted midi (scheduleMIDIEvents respects _manualShiftApplied)
+        this.scheduleMIDIEvents(midi);
+        
+        // Regenerate score display from the transformed MIDI (respecting mode/negRoot/etc.)
+        const scoreManager = this.app.modules.scoreManager;
+        if (scoreManager) {
+            try {
+                // Ensure parts reflect current transformation state
+                if (typeof this.updateChannels === 'function') this.updateChannels();
+                const transformedMidi = this.createCurrentMidi() || midi;
+                scoreManager.generateABCStringfromMIDI(transformedMidi);
+                scoreManager.updateScoreFollower('score', scoreManager.currentBarStart, true);
+            } catch (e) {
+                console.error('Failed to regenerate score after manual shift:', e);
+            }
+        }
+    }
+
+    /**
+     * Shift all relevant event ticks in the MIDI by ticksDelta (can be negative).
+     * Adjusts notes, CCs, pitch bends, program changes, and header events safely.
+     * Marks the midi as manually shifted so scheduleMIDIEvents won't re-align it.
+     * @param {Object} midi - MIDI object to mutate
+     * @param {number} ticksDelta - ticks to add (can be negative)
+     */
+    applyManualShiftToMidi(midi, ticksDelta) {
+        if (!midi || typeof ticksDelta !== 'number' || ticksDelta === 0) return;
+
+        // Shift tracks
+        midi.tracks.forEach(track => {
+            if (track.notes && Array.isArray(track.notes)) {
+                track.notes.forEach(note => {
+                    note.ticks = Math.max(0, Math.round((note.ticks || 0) + ticksDelta));
+                });
+            }
+
+            if (track.controlChanges && typeof track.controlChanges === 'object') {
+                Object.values(track.controlChanges).forEach(ccArray => {
+                    ccArray.forEach(cc => {
+                        cc.ticks = Math.max(0, Math.round((cc.ticks || 0) + ticksDelta));
+                    });
+                });
+            }
+
+            if (track.pitchBends && Array.isArray(track.pitchBends)) {
+                track.pitchBends.forEach(pb => {
+                    pb.ticks = Math.max(0, Math.round((pb.ticks || 0) + ticksDelta));
+                });
+            }
+
+            if (track.programChanges && Array.isArray(track.programChanges)) {
+                track.programChanges.forEach(pc => {
+                    pc.ticks = Math.max(0, Math.round((pc.ticks || 0) + ticksDelta));
+                });
+            }
+        });
+
+        // Shift header events
+        if (midi.header) {
+            if (Array.isArray(midi.header.tempos)) {
+                midi.header.tempos.forEach(t => {
+                    t.ticks = Math.max(0, Math.round((t.ticks || 0) + ticksDelta));
+                });
+            }
+            if (Array.isArray(midi.header.timeSignatures)) {
+                midi.header.timeSignatures.forEach(ts => {
+                    ts.ticks = Math.max(0, Math.round((ts.ticks || 0) + ticksDelta));
+                });
+            }
+            if (Array.isArray(midi.header.keySignatures)) {
+                midi.header.keySignatures.forEach(ks => {
+                    ks.ticks = Math.max(0, Math.round((ks.ticks || 0) + ticksDelta));
+                });
+            }
+        }
+
+        // Recompute overall duration (max of note end times) to avoid writing to getter-only properties.
+        let recomputedDuration = 0;
+        try {
+            midi.tracks.forEach(track => {
+                if (track.notes && Array.isArray(track.notes)) {
+                    track.notes.forEach(note => {
+                        const durTicks = (typeof note.durationTicks === 'number') ? note.durationTicks :
+                            (typeof note.duration === 'number' && midi.header?.ppq) ? Math.round(note.duration * (midi.header.ppq || 96)) : 0;
+                        recomputedDuration = Math.max(recomputedDuration, (note.ticks || 0) + (durTicks || 0));
+                    });
+                }
+            });
+        } catch (e) {
+            // Fallback to previous value + delta if something unexpected occurs
+            recomputedDuration = Math.max(0, Math.round((midi.durationTicks || 0) + ticksDelta));
+        }
+        
+        // Try to set durationTicks if writable; otherwise store fallback property
+        try {
+            const desc = Object.getOwnPropertyDescriptor(midi, 'durationTicks');
+            if (!desc || desc.writable) {
+                midi.durationTicks = Math.max(0, Math.round(recomputedDuration));
+            } else {
+                // property exists but not writable -> fallback
+                midi._durationTicks = Math.max(0, Math.round(recomputedDuration));
+            }
+        } catch (e) {
+            // If setting fails (e.g. sealed object), store fallback
+            midi._durationTicks = Math.max(0, Math.round(recomputedDuration));
+        }
+
+        // Mark manual shift
+        midi._manualShiftApplied = true;
+        midi._manualShiftTotal = (midi._manualShiftTotal || 0) + ticksDelta;
     }
 }
 

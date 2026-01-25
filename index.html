@@ -80,6 +80,22 @@
       <div style="display: flex; justify-content: center;">
         <div id="score" style="overflow-x: auto; max-width: 500px; position: relative; z-index: 1; background-color: rgba(255, 228, 196, 0.766);"></div>
       </div>
+      <div id="score-footer" style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+        <span style="color: #fff;">adjust score start manually:</span>
+        <select id="scoreShiftUnit" class="form-select" style="width:160px;">
+          <option value="16">sixteenth</option>
+          <option value="8">eighth</option>
+          <option value="4" selected>quarter</option>
+        </select>
+        <button class="btn btn-outline-light btn-sm" id="shiftScoreBack"
+          onclick="app.modules.transport.adjustScoreStart(-1, document.getElementById('scoreShiftUnit').value)">
+          Shift Start ←
+        </button>
+        <button class="btn btn-outline-light btn-sm" id="shiftScoreForward"
+          onclick="app.modules.transport.adjustScoreStart(1, document.getElementById('scoreShiftUnit').value)">
+          Shift Start →
+        </button>
+      </div>
     </div>
   </div>
   <div class="widget container accordion" id="accordionsContainer" style="margin-top: 20px;">
