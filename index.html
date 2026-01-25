@@ -72,7 +72,10 @@
     <div id="scoreContainer" style=" border: 1px solid white; display: none; margin-top: 20px; padding: 20px; background-color: rgba(0, 0, 0, 0.184); border-radius: 5px; max-width: 870px;">
       <div class="score-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; position: relative;">
         <h4 style="margin: 0;">Music Score</h4>
-        <button class="btn btn-outline-light btn-sm" onclick="app.modules.scoreManager.hideScore();">Close</button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-outline-success" id="downloadAbc" onclick="app.modules.scoreManager.downloadABC();">Download ABC</button>
+          <button class="btn btn-outline-light btn-sm" onclick="app.modules.scoreManager.hideScore();">Close</button>
+        </div>
       </div>
       <div style="display: flex; justify-content: center;">
         <div id="score" style="overflow-x: auto; max-width: 500px; position: relative; z-index: 1; background-color: rgba(255, 228, 196, 0.766);"></div>

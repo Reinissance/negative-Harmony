@@ -1752,6 +1752,52 @@ class ScoreManager {
             console.log('========================');
         }
     }
+
+    /**
+     * Download current ABC notation as a file named "adcScore.abc".
+     * Regenerates ABC from current MIDI if needed.
+     */
+    downloadABC() {
+        const filename = 'adcScore.abc';
+        const doDownload = async () => {
+            try {
+                let abc = (this.abcString && this.abcString.trim()) ? this.abcString : '';
+
+                // Try to regenerate if empty
+                if (!abc) {
+                    const transport = this.app?.modules?.transport;
+                    if (transport && typeof transport.createCurrentMidi === 'function') {
+                        const midi = transport.createCurrentMidi();
+                        if (midi) {
+                            abc = await this.generateABCStringfromMIDI(midi);
+                        }
+                    }
+                }
+
+                if (!abc || !abc.trim()) {
+                    // Minimal user feedback if no ABC data is available
+                    alert('No ABC data available to download.');
+                    return;
+                }
+
+                const blob = new Blob([abc], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                console.error('Failed to download ABC file:', err);
+                alert('Failed to download ABC file.');
+            }
+        };
+
+        doDownload();
+    }
 }
 
 // Export for module usage
