@@ -1668,13 +1668,47 @@ class ScoreManager {
                 return;
             }
             
+            // Get the basic bar index
             const currentBar = this.getCurrentPlaybackBar();
+
+            // Compute an "effective" bar that may advance to the next bar
+            // if we're already far enough through the current bar.
+            let effectiveBar = currentBar;
+
+            try {
+                if (window.Tone && window.Tone.Transport && typeof window.Tone.Transport.position === 'string') {
+                    const posParts = window.Tone.Transport.position.split(':').map(p => parseInt(p, 10) || 0);
+                    const [bars = 0, beats = 0, sixteenths = 0] = posParts;
+
+                    // Determine beats per measure from Tone (robust handling for number or array)
+                    let beatsPerBar = 4;
+                    const ts = window.Tone.Transport.timeSignature;
+                    if (typeof ts === 'number') {
+                        beatsPerBar = ts;
+                    } else if (Array.isArray(ts)) {
+                        beatsPerBar = ts[0] || 4;
+                    }
+
+                    // Compute fractional progress through current bar:
+                    // progress = (beats + sixteenths/4) / beatsPerBar
+                    const progress = (beats + (sixteenths / 4)) / Math.max(1, beatsPerBar);
+
+                    // If we've passed the threshold of the current bar (e.g. 60%),
+                    // treat playback as being in the next bar so the follower advances earlier.
+                    const ADVANCE_THRESHOLD = 0.6;
+                    if (bars === currentBar && progress >= ADVANCE_THRESHOLD) {
+                        effectiveBar = currentBar + 1;
+                    }
+                }
+            } catch (err) {
+                // silent fallback - keep effectiveBar === currentBar
+            }
             
-            // Update immediately if bar has changed
-            if (currentBar !== null && currentBar !== this.lastPolledBar) {
-                this.lastPolledBar = currentBar;
+            // Update only when effectiveBar has changed since last poll
+            if (effectiveBar !== null && effectiveBar !== this.lastPolledBar) {
+                this.lastPolledBar = effectiveBar;
                 // Update immediately without timeout
-                this.updateScoreFollower(containerId, currentBar);
+                this.updateScoreFollower(containerId, effectiveBar);
             }
         }, 50); // Even more frequent polling for better responsiveness
     }
@@ -1844,5 +1878,5 @@ class ScoreManager {
 
 // Export for module usage
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = NegativeHarmonyApp;
+    module.exports = ScoreManager;
 }
