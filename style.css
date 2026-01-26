@@ -1,4 +1,3 @@
-
 .st-btn, .st-btn-compact, .st-share-button {
     transition: none !important;
     animation: none !important;
@@ -147,6 +146,13 @@ input[type="range"]::-ms-thumb {
   body {
       margin-left: 15px;
       margin-right: 15px;
+      /* Avoid fixed background on small screens (prevents jump when layout changes) */
+      background-attachment: scroll;
+      /* Smoothly animate background movement/size when content height changes */
+      transition: background-position 400ms ease, background-size 400ms ease;
+      /* ensure consistent positioning */
+      background-position: center center;
+      background-size: cover;
   }
 
   .stretch {
