@@ -69,18 +69,18 @@
     <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0" class="form-range">
   </div>
   <div style="display: flex; justify-content: center;">
-    <div id="scoreContainer" style=" border: 1px solid white; display: none; margin-top: 20px; padding: 20px; background-color: rgba(0, 0, 0, 0.184); border-radius: 5px; max-width: 870px;">
-      <div class="score-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; position: relative;">
+    <div id="scoreContainer" class="boxed" style=" border: 1px solid white; display: none; margin-top: 20px; padding: 20px; background-color: rgba(0, 0, 0, 0.184); border-radius: 5px; max-width: 870px;">
+      <div class="score-header horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; position: relative;">
         <h4 style="margin: 0;">Music Score</h4>
-        <div style="display:flex;gap:8px;align-items:center;">
+        <div style="display:flex; gap:8px;align-items:center;">
           <button class="btn btn-outline-success" id="downloadAbc" onclick="app.modules.scoreManager.downloadABC();">Download ABC</button>
-          <button class="btn btn-outline-light btn-sm" onclick="app.modules.scoreManager.hideScore();">Close</button>
+          <button class="btn btn-outline-danger btn-sm" onclick="app.modules.scoreManager.hideScore();">Close</button>
         </div>
       </div>
       <div style="display: flex; justify-content: center;">
         <div id="score" style="overflow-x: auto; max-width: 500px; position: relative; z-index: 1; background-color: rgba(255, 228, 196, 0.766);"></div>
       </div>
-      <div id="score-footer" style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+      <div id="score-footer" class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; margin-top:10px; display:flex; align-items:center; gap:8px;">
         <span style="color: #fff;">adjust score start manually:</span>
         <select id="scoreShiftUnit" class="form-select" style="width:160px;">
           <option value="16">sixteenth</option>

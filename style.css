@@ -26,11 +26,30 @@ body {
   margin-bottom: 20px;
   margin-left: 65px;
   margin-right: 65px;
-  background: url('negativeHarmony.png') no-repeat fixed center center / cover;
   color: black;
   text-shadow: 0 0 15px black;
   color: rgba(255, 255, 255, 0.811);
   background-color: black;
+}
+
+/* Add a dedicated background layer so mobile browsers render it reliably and can animate it */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: url('negativeHarmony.png');
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: cover;
+  /* promote this layer for smooth animations */
+  -webkit-transform: translate3d(0,0,0);
+  transform: translate3d(0,0,0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  will-change: transform, background-position, background-size, opacity;
+  transition: transform 400ms ease, background-position 400ms ease, background-size 400ms ease, opacity 400ms ease;
+  pointer-events: none;
 }
 
 .boxed {
@@ -144,15 +163,24 @@ input[type="range"]::-ms-thumb {
   }
 
   body {
-      margin-left: 15px;
-      margin-right: 15px;
-      /* Avoid fixed background on small screens (prevents jump when layout changes) */
+      margin:0;
+      /* hide the original background shorthand on small screens so only ::before is used */
+      background: none !important;
       background-attachment: scroll;
-      /* Smoothly animate background movement/size when content height changes */
-      transition: background-position 400ms ease, background-size 400ms ease;
-      /* ensure consistent positioning */
+      /* keep no transforms on body itself */
+      transform: none !important;
+      -webkit-transform: none !important;
+      /* keep responsive background sizing via the ::before layer */
+  }
+
+  /* Ensure the ::before layer remains visible and animates smoothly on small screens */
+  body::before {
+      /* keep fixed positioning & sizing */
       background-position: center center;
       background-size: cover;
+      opacity: 1;
+      /* slight scale transform when content height changes looks smooth on many mobile browsers */
+      transform-origin: center center;
   }
 
   .stretch {
