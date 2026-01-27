@@ -1084,6 +1084,8 @@ class Transport {
             part.start(0.1);
             this.parts.push(part);
         });
+
+        midi._manualShiftApplied = false; // reset manual shift flag after scheduling
     }
 
     /**
@@ -1580,20 +1582,39 @@ class Transport {
 
         const ppq = midi.header?.ppq || 96;
         const timeSignature = midi.header?.timeSignatures?.[0]?.timeSignature || [4, 4];
-        const denominator = timeSignature[1] || 4;
-        const ticksPerBeat = ppq * (4 / denominator);
-
-        let unitTicks;
-        const unitStr = String(unit);
-        if (unitStr === '16') {
-            unitTicks = Math.round(ticksPerBeat / 4);
-        } else if (unitStr === '8') {
-            unitTicks = Math.round(ticksPerBeat / 2);
-        } else {
-            unitTicks = Math.round(ticksPerBeat); // quarter by default
+        const [numerator, denominator] = timeSignature;
+        
+        // Compute unit ticks as absolute note durations:
+        // durationTicks(noteWithDenominator) = ppq * (4 / denominatorOfNote)
+        // where unit is 4 (quarter), 8 (eighth), 16 (sixteenth)
+        const unitVal = parseInt(String(unit), 10) || 4;
+        let unitTicks = Math.round(ppq * (4 / unitVal));
+        
+        // Special-case common compound meters (e.g. 6/8): treat "quarter" shift as dotted-quarter (3 eighths)
+        if (denominator === 8 && numerator % 3 === 0 && unitVal === 4) {
+            // dotted quarter = 3 * eighth-note ticks
+            unitTicks = Math.round(ppq * (4 / 8) * 3); // = ppq * 1.5
         }
 
         const ticksDelta = steps * unitTicks;
+
+        // Prevent shifting left beyond the earliest note -> would compress notes to start
+        if (ticksDelta < 0) {
+            let earliestTick = Infinity;
+            midi.tracks.forEach(track => {
+                if (track.notes && Array.isArray(track.notes)) {
+                    track.notes.forEach(n => {
+                        if (typeof n.ticks === 'number') earliestTick = Math.min(earliestTick, n.ticks);
+                    });
+                }
+            });
+            if (!isFinite(earliestTick)) earliestTick = 0;
+            if (Math.abs(ticksDelta) > earliestTick) {
+                Utils.showError("Cannot shift earlier than the first note.");
+                return;
+            }
+        }
+        
         // Apply shift in place and reschedule
         this.applyManualShiftToMidi(midi, ticksDelta);
 
