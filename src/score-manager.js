@@ -516,19 +516,22 @@ class ScoreManager {
     /**
      * Reloads the page while preserving current settings via URL parameters
      */
-    reloadPageWithSettings() {
+    async reloadPageWithSettings() {
         try {
-            // Get current settings from settingsManager
-            if (this.app.modules.settingsManager && this.app.modules.settingsManager.share) {
-                const shareUrl = this.app.modules.settingsManager.share();
+            const sm = this.app && this.app.modules && this.app.modules.settingsManager;
+            if (sm && typeof sm.share === 'function') {
+                // Await async share() which may return a URL or null/undefined
+                const shareUrl = await sm.share();
                 if (shareUrl) {
-                    // Reload the page with settings preserved
-                    window.location = shareUrl;
+                    // Use href assignment to navigate
+                    window.location.href = shareUrl;
+                    return;
                 }
             } else {
                 console.warn('Settings manager not available, performing simple reload');
-                window.location.reload();
             }
+            // Fallback to simple reload if no share URL
+            window.location.reload();
         } catch (error) {
             console.error('Error reloading with settings:', error);
             // Fallback to simple reload
