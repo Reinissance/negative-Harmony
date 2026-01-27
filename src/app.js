@@ -73,23 +73,37 @@ class NegativeHarmonyApp {
         if (this.initialized) return;
 
         try {
+            const startLabel = document.getElementById("transportLabel");
+            startLabel.innerText = "Loading libraries...";
             // Load external libraries first (Tone.js, WebAudioFont, etc.)
             await this.loadLibraries();
             
+            startLabel.innerText = "Loading modules...";
             // Load application modules
             await this.loadModules();
             
+            startLabel.innerText = "Initializing modules...";
             // Initialize all modules in dependency order
-            this.initializeModules();
+            await this.initializeModules();
             
+            startLabel.innerText = "Setting up UI...";
             // Set up UI components and event handlers
-            this.initializeUI();
+            await this.initializeUI();
             
             this.initialized = true;
             console.log('Negative Harmony App initialized successfully');
-            
+
+            // offert start button
+            startLabel.innerText = "Start";
+            const startButton = document.getElementById("transportButton");
+            startButton.disabled = false;
+            startButton.ariaDisabled = "false";
+            startLabel.style.pointerEvents = "auto";
+            startLabel.style.opacity = "1.0";
             // Make app globally available for debugging and external access
             window.app = this;
+
+
             
         } catch (error) {
             console.error('Failed to initialize app:', error);
