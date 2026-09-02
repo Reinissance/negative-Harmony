@@ -324,6 +324,11 @@ class SettingsManager {
                 console.error("Cannot load MIDI file: modular MIDI manager not available.");
             }
 
+            // Restore score settings (time signature, key signature, manual start shift)
+            // now that the MIDI has been parsed and scheduled, so they aren't clobbered
+            // by parseMidiFile's own reset logic.
+            await this.applyScoreSettings(urlParams);
+
             // Update UI elements
             document.getElementById("midiUrl").value = midiFileUrl;
             const shareUrl = this.share();
@@ -332,6 +337,94 @@ class SettingsManager {
         } catch (error) {
             console.error('Error loading MIDI file:', error);
             Utils.showError('Error loading MIDI file: ' + error.message);
+        }
+    }
+
+    /**
+     * Restores score-related settings (time signature, key signature, and manual
+     * score-start shift) from URL parameters after a MIDI file has finished loading.
+     * @async
+     * @param {URLSearchParams} urlParams - URL search parameters
+     */
+    async applyScoreSettings(urlParams) {
+        const state = this.app.state;
+        const scoreManager = this.app.modules.scoreManager;
+        const transport = this.app.modules.transport;
+
+        // Time signature
+        const timeSignatureParam = urlParams.get('timeSignature');
+        if (timeSignatureParam) {
+            try {
+                const ts = JSON.parse(decodeURIComponent(timeSignatureParam));
+                if (Array.isArray(ts) && ts.length >= 2) {
+                    state.timeSignature = ts;
+                    if (scoreManager) {
+                        scoreManager.setTimeSignatureUI(ts);
+                        if (window.Tone && window.Tone.Transport) {
+                            try {
+                                window.Tone.Transport.timeSignature = ts;
+                            } catch (e) {
+                                window.Tone.Transport.timeSignature = ts[0];
+                            }
+                        }
+                    }
+                    this.debouncedUpdateUserSettings('timeSignature', ts, -1);
+                }
+            } catch (e) {
+                console.warn('Failed to restore time signature from URL:', e);
+            }
+        }
+
+        // Key signature
+        const keySignatureParam = urlParams.get('keySignature');
+        if (keySignatureParam !== null && keySignatureParam !== undefined && keySignatureParam !== '') {
+            const ks = parseInt(keySignatureParam, 10);
+            if (!isNaN(ks)) {
+                state.keySignature = ks;
+                if (scoreManager) {
+                    scoreManager.setKeySignatureUI(ks);
+                }
+                this.debouncedUpdateUserSettings('keySignature', ks, -1);
+            }
+        }
+
+        // Regenerate the score once so the restored time/key signature take effect together
+        if (scoreManager && transport && typeof transport.createCurrentMidi === 'function') {
+            try {
+                const currentMidi = transport.createCurrentMidi();
+                if (currentMidi) {
+                    const abcNotation = await scoreManager.generateABCStringfromMIDI(
+                        currentMidi,
+                        scoreManager.getActiveTimeSignature(),
+                        scoreManager.getActiveKeySignature()
+                    );
+                    if (abcNotation) {
+                        scoreManager.abcString = abcNotation;
+                        await scoreManager.reloadScore('score');
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to regenerate score after restoring time/key signature:', e);
+            }
+        }
+
+        // Manual score-start shift (applied last, after time/key signature regeneration,
+        // since it also regenerates the ABC/score internally)
+        const scoreShiftTicksParam = urlParams.get('scoreShiftTicks');
+        const scoreShiftUnitParam = urlParams.get('scoreShiftUnit');
+        if (scoreShiftTicksParam) {
+            const ticksDelta = parseInt(scoreShiftTicksParam, 10);
+            if (!isNaN(ticksDelta) && ticksDelta !== 0 && transport && transport.restoreScoreShiftTicks) {
+                state.scoreShiftTicks = ticksDelta;
+                if (scoreShiftUnitParam) {
+                    state.scoreShiftUnit = scoreShiftUnitParam;
+                    const shiftEl = document.getElementById('scoreShiftUnit');
+                    if (shiftEl) shiftEl.value = scoreShiftUnitParam;
+                }
+                await transport.restoreScoreShiftTicks(ticksDelta);
+                this.debouncedUpdateUserSettings('scoreShiftTicks', ticksDelta, -1);
+                this.debouncedUpdateUserSettings('scoreShiftUnit', state.scoreShiftUnit, -1);
+            }
         }
     }
 

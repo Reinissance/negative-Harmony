@@ -77,14 +77,23 @@ class Transport {
             }
             
             // Update score and stop all notes after mode change
-            setTimeout(() => {
+            setTimeout(async () => {
                 const midiManager = this.app.modules.midiManager;
                 if (midiManager) {
                     midiManager.sendEvent_allNotesOff();
                     const scoreManager = this.app.modules.scoreManager;
                     if (scoreManager) {
                         const updatedMidiData = this.createCurrentMidi();
-                        scoreManager.generateABCStringfromMIDI(updatedMidiData);
+                        // Await ABC regeneration before updating the follower so it
+                        // never operates on stale ABC/bar data (avoids score crashes).
+                        const abcNotation = await scoreManager.generateABCStringfromMIDI(
+                            updatedMidiData,
+                            scoreManager.getActiveTimeSignature(),
+                            scoreManager.getActiveKeySignature()
+                        );
+                        if (abcNotation) {
+                            scoreManager.abcString = abcNotation;
+                        }
                         scoreManager.updateScoreFollower('score', scoreManager.currentBarStart, true);
                     }
                 }
@@ -1211,8 +1220,19 @@ class Transport {
             const scoreFollower = this.app.modules.scoreManager;
             if (scoreFollower && scoreFollower.scoreShown) {
                 const updatedMidi = this.createCurrentMidi();
-                scoreFollower.generateABCStringfromMIDI(updatedMidi);
-                scoreFollower.updateScoreFollower('score', scoreFollower.currentBarStart, true);
+                // Await ABC regeneration before updating the follower so it
+                // never operates on stale ABC/bar data (avoids score crashes).
+                (async () => {
+                    const abcNotation = await scoreFollower.generateABCStringfromMIDI(
+                        updatedMidi,
+                        scoreFollower.getActiveTimeSignature(),
+                        scoreFollower.getActiveKeySignature()
+                    );
+                    if (abcNotation) {
+                        scoreFollower.abcString = abcNotation;
+                    }
+                    scoreFollower.updateScoreFollower('score', scoreFollower.currentBarStart, true);
+                })();
             }
 
         } catch (error) {
@@ -1573,7 +1593,7 @@ class Transport {
      * @param {number} steps - Number of units to shift (positive = forward/delay, negative = backward/advance)
      * @param {string|number} unit - Unit denominator as string/number: "16","8","4" (sixteenth, eighth, quarter)
      */
-    adjustScoreStart(steps, unit) {
+    async adjustScoreStart(steps, unit) {
         const midi = this.originalMidi;
         if (!midi) {
             console.warn('adjustScoreStart: no MIDI loaded to adjust');
@@ -1618,6 +1638,14 @@ class Transport {
         // Apply shift in place and reschedule
         this.applyManualShiftToMidi(midi, ticksDelta);
 
+        // Persist the cumulative shift (in ticks) and the unit used, so it can be
+        // restored later (e.g. via the shareable URL) and included in share().
+        const settingsManager = this.app.modules.settingsManager;
+        if (settingsManager) {
+            settingsManager.updateUserSettings('scoreShiftTicks', midi._manualShiftTotal || 0, -1);
+            settingsManager.updateUserSettings('scoreShiftUnit', String(unit), -1);
+        }
+
         // Reschedule playback using the manually-shifted midi (scheduleMIDIEvents respects _manualShiftApplied)
         this.scheduleMIDIEvents(midi);
         
@@ -1628,7 +1656,16 @@ class Transport {
                 // Ensure parts reflect current transformation state
                 if (typeof this.updateChannels === 'function') this.updateChannels();
                 const transformedMidi = this.createCurrentMidi() || midi;
-                scoreManager.generateABCStringfromMIDI(transformedMidi);
+                // Await ABC regeneration before updating the follower so it
+                // never operates on stale ABC/bar data (avoids score crashes).
+                const abcNotation = await scoreManager.generateABCStringfromMIDI(
+                    transformedMidi,
+                    scoreManager.getActiveTimeSignature(),
+                    scoreManager.getActiveKeySignature()
+                );
+                if (abcNotation) {
+                    scoreManager.abcString = abcNotation;
+                }
                 scoreManager.updateScoreFollower('score', scoreManager.currentBarStart, true);
             } catch (e) {
                 console.error('Failed to regenerate score after manual shift:', e);
@@ -1728,6 +1765,39 @@ class Transport {
         // Mark manual shift
         midi._manualShiftApplied = true;
         midi._manualShiftTotal = (midi._manualShiftTotal || 0) + ticksDelta;
+    }
+
+    /**
+     * Restore a previously-persisted manual score-start shift (in absolute ticks) onto the
+     * currently loaded MIDI, e.g. after loading a shared URL. Unlike adjustScoreStart(),
+     * this takes an absolute tick delta rather than steps of a rhythmic unit.
+     * @param {number} ticksDelta - Net ticks to shift the score start by (can be negative)
+     */
+    async restoreScoreShiftTicks(ticksDelta) {
+        const midi = this.originalMidi;
+        if (!midi || typeof ticksDelta !== 'number' || ticksDelta === 0) return;
+
+        this.applyManualShiftToMidi(midi, ticksDelta);
+        this.scheduleMIDIEvents(midi);
+
+        const scoreManager = this.app.modules.scoreManager;
+        if (scoreManager) {
+            try {
+                if (typeof this.updateChannels === 'function') this.updateChannels();
+                const transformedMidi = this.createCurrentMidi() || midi;
+                const abcNotation = await scoreManager.generateABCStringfromMIDI(
+                    transformedMidi,
+                    scoreManager.getActiveTimeSignature(),
+                    scoreManager.getActiveKeySignature()
+                );
+                if (abcNotation) {
+                    scoreManager.abcString = abcNotation;
+                }
+                scoreManager.updateScoreFollower('score', scoreManager.currentBarStart, true);
+            } catch (e) {
+                console.error('Failed to regenerate score after restoring manual shift:', e);
+            }
+        }
     }
 }
 

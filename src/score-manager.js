@@ -166,9 +166,10 @@ class ScoreManager {
      * @async
      * @param {Object} midiFile - MIDI file object to convert
      * @param {Array|number|string|null} timeSignature - Optional time signature to force (e.g. [4,4] or '4/4' or 4)
+     * @param {number|null} keySignature - Optional key signature to force, -6 to 6 sharps (negative = flats), passed to midi2abc via -k
      * @returns {Promise<string>} Generated ABC notation string
      */
-    async generateABCStringfromMIDI(midiFile, timeSignature = null) {
+    async generateABCStringfromMIDI(midiFile, timeSignature = null, keySignature = null) {
         if (!this.midi2abcReady || !this.midi2abc || !this.midi2abc.FS) {
             console.error('midi2abc WASM module not ready');
             this.handleAbcGenerationFailure('WASM module not ready');
@@ -210,6 +211,14 @@ class ScoreManager {
                     tsString = String(timeSignature);
                 }
                 args.push('-m', tsString);
+            }
+            // Force the key signature (in sharps, -6..6) if the user selected one explicitly,
+            // otherwise let midi2abc derive it from the MIDI file's own key signature meta events.
+            if (keySignature !== null && keySignature !== undefined && keySignature !== '') {
+                const ksNum = parseInt(keySignature, 10);
+                if (!isNaN(ksNum)) {
+                    args.push('-k', String(Math.max(-6, Math.min(6, ksNum))));
+                }
             }
             const result = this.midi2abc.callMain(args);
 
@@ -377,6 +386,17 @@ class ScoreManager {
      * Displays an error modal when ABC generation fails
      * @param {string} errorMessage - Error message to display
      */
+    /**
+     * Handles a failure to generate ABC notation from MIDI by showing the
+     * standard error notification to the user instead of leaving the score
+     * in a broken/inconsistent state.
+     * @param {string} errorMessage - Description of the failure
+     */
+    handleAbcGenerationFailure(errorMessage) {
+        console.error('ABC generation failure:', errorMessage);
+        this.showAbcErrorNotification(errorMessage);
+    }
+
     showAbcErrorNotification(errorMessage) {
         // Hide score container if it's showing
         const scoreContainer = document.getElementById('scoreContainer');
@@ -1431,7 +1451,8 @@ class ScoreManager {
             if (currentMidi) {
                 // prefer UI selects, then Tone.Transport, then MIDI header
                 const ts = this.getActiveTimeSignature();
-                abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts);
+                const ks = this.getActiveKeySignature();
+                abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts, ks);
             }
         }
 
@@ -1518,37 +1539,12 @@ class ScoreManager {
 
             // prefer UI selects, then Tone.Transport, then MIDI header
             const ts = this.getActiveTimeSignature();
-            const abcString = await this.generateABCStringfromMIDI(midiFile, ts);
+            const ks = this.getActiveKeySignature();
+            const abcString = await this.generateABCStringfromMIDI(midiFile, ts, ks);
             return abcString;
         } catch (error) {
             console.error('Error updating MIDI and generating ABC:', error);
             return '';
-        }
-    }
-
-    /**
-     * Advances the score follower by a specified number of bars,
-     * regenerates the ABC if the MIDI has changed, and updates the display.
-     * @param {number} bars - Number of bars to advance (can be negative)
-     */
-    async advanceScoreFollower(bars = 4) {
-        // Update the MIDI and get the latest ABC notation
-        const updatedABC = await this.updateMidiAndGetABC();
-        if (updatedABC) {
-            this.abcString = updatedABC;
-        }
-
-        // Calculate the new starting bar, ensuring it stays within bounds
-        const newStart = Math.max(0, this.currentBarStart + bars);
-        this.currentBarStart = newStart;
-
-        // Render the updated score follower
-        this.renderScoreFollower('score', this.currentBarStart);
-
-        // Update the display
-        const display = document.getElementById('currentBarDisplay');
-        if (display) {
-            display.textContent = this.currentBarStart;
         }
     }
 
@@ -1571,7 +1567,8 @@ class ScoreManager {
                 if (currentMidi) {
                     // prefer UI selects, then Tone.Transport, then MIDI header
                     const ts = this.getActiveTimeSignature();
-                    const abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts);
+                    const ks = this.getActiveKeySignature();
+                    const abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts, ks);
                     if (!abcNotation) {
                          const scoreElement = document.getElementById(containerId);
                          if (scoreElement) {
@@ -1634,7 +1631,8 @@ class ScoreManager {
 
                  // prefer UI selects, then Tone.Transport, then MIDI header
                  const ts = this.getActiveTimeSignature();
-                 const abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts);
+                 const ks = this.getActiveKeySignature();
+                 const abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts, ks);
                  if (!abcNotation) {
                      // generateABCStringfromMIDI will handle the error notification
                      return;
@@ -1716,380 +1714,6 @@ class ScoreManager {
     }
 
     /**
-     * Sets the first musical bar information for score synchronization
-     * @param {Object} downbeat - Downbeat information from transport
-     */
-    setFirstMusicalBar(downbeat) {
-        this.firstDownbeat = downbeat;
-        
-        // If you need to show the detected downbeat in UI:
-        // console.log(`First downbeat detected at: ${downbeat.time.toFixed(2)}s (${downbeat.method})`);
-    }
-
-    /**
-     * Gets the current playback bar position from transport timing
-     * @returns {number} Current bar number (0-based)
-     */
-    getCurrentPlaybackBar() {
-        const transport = this.app.modules.transport;
-        if (!transport || !transport.playing) {
-            return 0;
-        }
-        
-        try {
-            if (window.Tone && window.Tone.Transport) {
-                // Use Tone.js position directly for more accurate timing
-                const position = window.Tone.Transport.position;
-                const state = this.app.state;
-                
-                // Parse the position string (format: "bars:beats:sixteenths")
-                const positionParts = position.split(':').map(p => parseInt(p, 10) || 0);
-                const [parsedBars = 0, parsedBeats = 0, parsedSixteenths = 0] = positionParts;
-                
-                // Detect whether Tone.Transport.position uses 1-based bar numbering.
-                if (this._tonePositionOneBased === undefined) {
-                    const seconds = (window.Tone.Transport.seconds || 0);
-                    this._tonePositionOneBased = (seconds < 0.05 && parsedBars > 0);
-                }
-                
-                // Determine beats per bar (robust for number or array)
-                let beatsPerBar = 4;
-                const ts = window.Tone.Transport.timeSignature;
-                if (typeof ts === 'number') {
-                    beatsPerBar = ts;
-                } else if (Array.isArray(ts)) {
-                    beatsPerBar = ts[0] || 4;
-                }
-
-                // fractional bar index (0-based after correction)
-                let barFloat = parsedBars + (parsedBeats / Math.max(1, beatsPerBar)) + (parsedSixteenths / (Math.max(1, beatsPerBar) * 4));
-                if (this._tonePositionOneBased) barFloat = Math.max(0, barFloat - 1);
-                let currentBar = Math.max(0, Math.floor(barFloat));
-                
-                // Account for reversed playback
-                if (state.reversedPlayback) {
-                    const originalMidi = transport.originalMidi;
-                    if (originalMidi && originalMidi.header) {
-                        const ppq = originalMidi.header.ppq || 96;
-                        const timeSignature = originalMidi.header.timeSignatures?.[0]?.timeSignature || [4, 4];
-                        const [numerator, denominator] = timeSignature;
-                        
-                        // Calculate ticks per beat and per measure correctly for arbitrary time signatures
-                        const ticksPerBeat = ppq * (4 / denominator);
-                        const ticksPerMeasure = ticksPerBeat * numerator;
-                        const totalTicks = originalMidi.durationTicks || 0;
-                        const totalBars = Math.ceil(totalTicks / Math.max(1, ticksPerMeasure));
-                        
-                        currentBar = Math.max(0, totalBars - currentBar - 1);
-                    }
-                }
-                
-                return Math.max(0, currentBar);
-            }
-        } catch (error) {
-            console.warn('Could not get current playback bar:', error);
-        }
-        
-        return 0;
-    }
-
-
-
-    /**
-     * Updates the score follower to show the current playback position
-     * @param {string} containerId - Container element ID
-     * @param {number} barNumber - Current bar number being played
-     * @param {boolean} immediately - Whether to update immediately without debouncing
-     */
-    updateScoreFollower(containerId, barNumber, immediately = false) {
-
-        // Update current bar display
-        const display = document.getElementById('currentBarDisplay');
-        if (display) {
-            display.textContent = `Bar: ${barNumber + 1} (Window: ${this.currentBarStart + 1}-${this.currentBarStart + 4})`;
-        }
-        
-        // Calculate which 4-bar window this bar belongs to
-        let targetWindow = Math.floor(barNumber / 4) * 4;
-
-        // Update if we've moved to a different 4-bar window or immediately requested
-        if (targetWindow !== this.currentBarStart || immediately) {
-            if (this.app.state.reversedPlayback) {
-                targetWindow = Math.abs(this.totalBars - targetWindow);
-                if (targetWindow === this.currentBarStart) {
-                    return; // No change
-                }
-            }
-            this.currentBarStart = targetWindow;
-            // console.log(`Score follower updating to bars ${this.currentBarStart}-${this.currentBarStart + 3} (current bar: ${barNumber})`);
-            
-            // Clear any pending updates
-            if (this.updateTimeout) {
-                clearTimeout(this.updateTimeout);
-                this.updateTimeout = null;
-            }
-            
-            // Update immediately without delay
-            this.renderScoreFollower(containerId, this.currentBarStart);
-        }
-    }
-
-    /**
-     * Starts score following mode with real-time playback synchronization
-     * @param {string} containerId - Container element ID (default: 'score')
-     * @param {number} startBar - Starting bar number (default: 0)
-     */
-    startScoreFollowing(containerId = 'score', startBar = 0) {
-        // console.log(`Starting score following at bar ${startBar}...`);
-        this.scoreFollowerActive = true;
-        
-        // Get the actual current playback position instead of using startBar parameter
-        const currentBar = this.getCurrentPlaybackBar();
-        this.currentBarStart = Math.floor(currentBar / 4) * 4; // Align to 4-bar boundaries
-        this.lastPolledBar = null; // Reset polling state
-        
-        // console.log(`Score follower starting at bar ${currentBar}, window: ${this.currentBarStart}-${this.currentBarStart + 3}`);
-        
-        // Initial render with immediate update
-        this.renderScoreFollower(containerId, this.currentBarStart);
-        
-        // console.log('Score follower ready - starting polling immediately');
-        
-        // Start polling immediately rather than waiting
-        this.startPollingForPlayback(containerId);
-    }
-
-    /**
-     * Starts polling the transport for playback position updates
-     * @param {string} containerId - Container element ID for updates
-     */
-    startPollingForPlayback(containerId) {
-        if (this.pollingInterval) {
-            clearInterval(this.pollingInterval);
-        }
-        
-        if (!this.scoreFollowerActive) {
-            return;
-        }
-
-        // Start polling immediately with higher frequency
-        this.pollingInterval = setInterval(() => {
-            const transport = this.app.modules.transport;
-            
-            // Only poll if transport is actually playing
-            if (!transport || !transport.playing) {
-                this.stopPollingForPlayback();
-                return;
-            }
-            
-            // Compute fractional bar from Tone position (reuse detection logic)
-            let effectiveBar = this.getCurrentPlaybackBar();
-
-            try {
-                if (window.Tone && window.Tone.Transport && typeof window.Tone.Transport.position === 'string') {
-                    const parts = window.Tone.Transport.position.split(':').map(p => parseInt(p, 10) || 0);
-                    const [bars = 0, beats = 0, sixteenths = 0] = parts;
-
-                    let beatsPerBar = 4;
-                    const ts = window.Tone.Transport.timeSignature;
-                    if (typeof ts === 'number') beatsPerBar = ts;
-                    else if (Array.isArray(ts)) beatsPerBar = ts[0] || 4;
-
-                    let barFloat = bars + (beats / Math.max(1, beatsPerBar)) + (sixteenths / (Math.max(1, beatsPerBar) * 4));
-                    if (this._tonePositionOneBased) barFloat = Math.max(0, barFloat - 1);
-
-                    const ADVANCE_THRESHOLD = 0.6;
-                    const progress = (beats + (sixteenths / 4)) / Math.max(1, beatsPerBar);
-                    // Use barFloat to compute current integer bar and possibly advance
-                    let currentIntBar = Math.floor(barFloat);
-                    if (progress >= ADVANCE_THRESHOLD) currentIntBar = currentIntBar + 1;
-
-                    effectiveBar = Math.max(0, currentIntBar);
-                }
-            } catch (err) {
-                // silent fallback - use getCurrentPlaybackBar result
-            }
-
-            // Update only when effectiveBar has changed since last poll
-            if (effectiveBar !== null && effectiveBar !== this.lastPolledBar) {
-                this.lastPolledBar = effectiveBar;
-                // Update immediately without timeout
-                this.updateScoreFollower(containerId, effectiveBar);
-            }
-        }, 50); // Even more frequent polling for better responsiveness
-    }
-
-    /**
-     * Stops polling for playback position when playback ends
-     */
-    stopPollingForPlayback() {
-        if (this.pollingInterval) {
-            // console.log('Stopping score following polling (playback stopped)');
-            clearInterval(this.pollingInterval);
-            this.pollingInterval = null;
-        }
-    }
-
-    /**
-     * Stops all score following activity and cleans up resources
-     */
-    stopScoreFollowing() {
-        // console.log('Stopping score following...');
-        this.scoreFollowerActive = false;
-        this.lastPolledBar = null;
-        
-        // Clear any pending updates
-        if (this.updateTimeout) {
-            clearTimeout(this.updateTimeout);
-            this.updateTimeout = null;
-        }
-        
-        // Stop polling
-        this.stopPollingForPlayback();
-        
-        // Remove controls
-        const controls = document.querySelector('.score-follower-controls');
-        if (controls) {
-            controls.remove();
-        }
-    }
-
-    /**
-     * Manually advances the score follower by a specified number of bars
-     * @param {string} containerId - Container element ID (default: 'score')
-     * @param {number} bars - Number of bars to advance (can be negative, default: 4)
-     */
-    advanceScoreFollower(containerId = 'score', bars = 4) {
-        const newStart = Math.max(0, this.currentBarStart + bars);
-        
-        // Basic bounds checking - don't go beyond reasonable limits
-        if (newStart >= 0) {
-            this.currentBarStart = newStart;
-            // console.log(`Manually advancing to bar ${this.currentBarStart}`);
-            this.renderScoreFollower(containerId, this.currentBarStart);
-            
-            // Update display
-            const display = document.getElementById('currentBarDisplay');
-            if (display) {
-                display.textContent = this.currentBarStart;
-            }
-        }
-    }
-
-    /**
-     * Hides the score display and cleans up score following resources
-     */
-    hideScore() {
-        // console.log('Hiding score and cleaning up score follower');
-        this.stopScoreFollowing();
-        this.scoreShown = false;
-        this.abcString = "";
-
-        const scoreContainer = document.getElementById('scoreContainer');
-        if (scoreContainer) {
-            scoreContainer.style.display = 'none';
-            document.getElementById("showScore").style.display = 'block';
-        }
-    }
-
-    /**
-     * Shows the score with automatic score following enabled
-     */
-    showScore() {
-        this.scoreShown = true;
-        const scoreContainer = document.getElementById('scoreContainer');
-        if (scoreContainer) {
-            scoreContainer.style.display = 'block';
-            document.getElementById("showScore").style.display = 'none';
-        }
-        
-        // Always use score following when showing the score
-        const transport = this.app.modules.transport;
-        const useScoreFollowing = true; // Always enable score following
-        
-        this.showMidiScore(useScoreFollowing);
-        
-        // Only sync Tone.js time signature from ABC if Tone doesn't already have one
-        try {
-            const ts = window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature;
-            if (!ts) {
-                this.syncToneTimeSignatureFromABC();
-            }
-        } catch (e) {
-            this.syncToneTimeSignatureFromABC();
-        }
-
-        // Add manual controls
-        this.addScoreFollowerControls(scoreContainer);
-    }
-
-    /**
-     * Debug method to check synchronization between score and playback
-     */
-    debugCurrentPosition() {
-        const transport = this.app.modules.transport;
-        if (transport && transport.playing) {
-            const tonePosition = window.Tone.Transport.position;
-            const calculatedBar = this.getCurrentPlaybackBar();
-            const currentWindow = Math.floor(calculatedBar / 4) * 4;
-            
-            console.log('=== SCORE SYNC DEBUG ===');
-            console.log('Tone.Transport.position:', tonePosition);
-            console.log('Calculated bar:', calculatedBar);
-            console.log('Current 4-bar window:', `${currentWindow}-${currentWindow + 3}`);
-            console.log('Score showing window:', `${this.currentBarStart}-${this.currentBarStart + 3}`);
-            console.log('========================');
-        }
-    }
-
-    /**
-     * Download current ABC notation as a file named "adcScore.abc".
-     * Regenerates ABC from current MIDI if needed.
-     */
-    downloadABC() {
-        const filename = 'adcScore.abc';
-        const doDownload = async () => {
-            try {
-                let abc = (this.abcString && this.abcString.trim()) ? this.abcString : '';
-
-                // Try to regenerate if empty
-                if (!abc) {
-                    const transport = this.app?.modules?.transport;
-                    if (transport && typeof transport.createCurrentMidi === 'function') {
-                        const midi = transport.createCurrentMidi();
-                        if (midi) {
-                            abc = await this.generateABCStringfromMIDI(midi);
-                        }
-                    }
-                }
-
-                if (!abc || !abc.trim()) {
-                    // Minimal user feedback if no ABC data is available
-                    alert('No ABC data available to download.');
-                    return;
-                }
-
-                const blob = new Blob([abc], { type: 'text/plain;charset=utf-8' });
-                const url = URL.createObjectURL(blob);
-                               const a = document.createElement('a');
-                a.style.display = 'none';
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-            } catch (err) {
-
-                console.error('Failed to download ABC file:', err);
-                alert('Failed to download ABC file.');
-            }
-        };
-
-        doDownload();
-    }
-
-    /**
      * Read active time signature from UI selects, Tone.Transport, or MIDI header.
      * Returns [numerator, denominator]
      */
@@ -2131,12 +1755,37 @@ class ScoreManager {
     }
 
     /**
+     * Read the active key signature from the UI select.
+     * Returns an integer from -6 to 6 (sharps positive, flats negative) or null
+     * if left on "Auto" (midi2abc should guess/derive it from the MIDI file).
+     */
+    getActiveKeySignature() {
+        try {
+            const keyEl = document.getElementById('keySignature');
+            if (keyEl && keyEl.value !== '' && keyEl.value !== 'auto') {
+                const key = parseInt(keyEl.value, 10);
+                if (!isNaN(key)) {
+                    return Math.max(-6, Math.min(6, key));
+                }
+            }
+        } catch (e) { console.error('Error reading key signature from UI select:', e); }
+
+        return null;
+    }
+
+    /**
      * Read UI selects and apply the selected time signature to Tone and ABC generation,
      * then regenerate and reload the displayed score.
      */
     async onTimeSignatureSelectChange() {
         try {
             const [num, den] = this.getActiveTimeSignature();
+
+            // Persist the user's choice so it is included in the shareable URL
+            const settingsManager = this.app.modules.settingsManager;
+            if (settingsManager) {
+                settingsManager.updateUserSettings('timeSignature', [num, den], -1);
+            }
 
             // Try to set Tone.Transport.timeSignature as [num,den], fallback to number
             try {
@@ -2153,11 +1802,12 @@ class ScoreManager {
             }
 
             // Regenerate ABC using the new time signature (pass to midi2abc with -m)
+            const ks = this.getActiveKeySignature();
             const transport = this.app.modules.transport;
             if (transport && typeof transport.createCurrentMidi === 'function') {
                 const currentMidi = transport.createCurrentMidi();
                 if (currentMidi) {
-                    const abcNotation = await this.generateABCStringfromMIDI(currentMidi, [num, den]);
+                    const abcNotation = await this.generateABCStringfromMIDI(currentMidi, [num, den], ks);
                     if (abcNotation) {
                         this.abcString = abcNotation;
                         // Reload to ensure injection & rendering are consistent
@@ -2167,6 +1817,23 @@ class ScoreManager {
             }
         } catch (err) {
             console.error('Error handling time signature change:', err);
+        }
+    }
+
+    /**
+     * Read the key signature UI select and apply it to ABC generation,
+     * then regenerate and reload the displayed score.
+     */
+    async onKeySignatureSelectChange() {
+        try {
+            // Persist the user's choice so it is included in the shareable URL
+            const settingsManager = this.app.modules.settingsManager;
+            if (settingsManager) {
+                settingsManager.updateUserSettings('keySignature', this.getActiveKeySignature(), -1);
+            }
+            await this.reloadScore('score');
+        } catch (err) {
+            console.error('Error handling key signature change:', err);
         }
     }
 
@@ -2410,13 +2077,25 @@ class ScoreManager {
     }
 
     /**
-     * Manually advances the score follower by a specified number of bars
+     * Manually advances the score follower by a specified number of bars,
+     * regenerating the ABC from the current MIDI if it has changed.
      * @param {string} containerId - Container element ID (default: 'score')
      * @param {number} bars - Number of bars to advance (can be negative, default: 4)
      */
-    advanceScoreFollower(containerId = 'score', bars = 4) {
+    async advanceScoreFollower(containerId = 'score', bars = 4) {
+        // Update the MIDI and get the latest ABC notation before rendering
+        // so the score follower always reflects the current MIDI state.
+        try {
+            const updatedABC = await this.updateMidiAndGetABC();
+            if (updatedABC) {
+                this.abcString = updatedABC;
+            }
+        } catch (err) {
+            console.error('Error updating ABC before advancing score follower:', err);
+        }
+
         const newStart = Math.max(0, this.currentBarStart + bars);
-        
+
         // Basic bounds checking - don't go beyond reasonable limits
         if (newStart >= 0) {
             this.currentBarStart = newStart;
@@ -2513,7 +2192,7 @@ class ScoreManager {
                     if (transport && typeof transport.createCurrentMidi === 'function') {
                         const midi = transport.createCurrentMidi();
                         if (midi) {
-                            abc = await this.generateABCStringfromMIDI(midi);
+                            abc = await this.generateABCStringfromMIDI(midi, this.getActiveTimeSignature(), this.getActiveKeySignature());
                         }
                     }
                 }
@@ -2573,6 +2252,24 @@ class ScoreManager {
         // set UI values if present in options
         numEl.value = String(num);
         denEl.value = String(den);
+    }
+
+    /**
+     * Set the key signature UI select to reflect a given key signature value.
+     * @param {number|null} ks - Integer -6..6 (flats/sharps), or null/undefined for "Auto (from MIDI)"
+     */
+    setKeySignatureUI(ks) {
+        const keyEl = document.getElementById('keySignature');
+        if (!keyEl) return;
+
+        if (ks === null || ks === undefined || isNaN(ks)) {
+            keyEl.value = 'auto';
+        } else {
+            const clamped = String(Math.max(-6, Math.min(6, parseInt(ks, 10))));
+            // Only set if a matching option exists, else fall back to auto
+            const hasOption = Array.from(keyEl.options).some(opt => opt.value === clamped);
+            keyEl.value = hasOption ? clamped : 'auto';
+        }
     }
 }
 

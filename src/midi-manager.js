@@ -231,6 +231,12 @@ class MidiManager {
             console.error("Transport module not found, cannot set playback speed.");
         }
         
+        // Reveal the score button now that a MIDI file has been loaded
+        const showScoreBtn = document.getElementById("showScore");
+        if (showScoreBtn) {
+            showScoreBtn.style.display = "flex";
+        }
+
         // Update MIDI file name display in UI
         const midiFileName = document.getElementById("midiFileName");
         if (midiFileName) {
@@ -270,7 +276,20 @@ class MidiManager {
                     } catch (e) { ts = null; }
 
                     try { sm.setTimeSignatureUI(ts); } catch (e) { /* ignore */ }
+                    // Reset key signature select back to "Auto (from MIDI)"
+                    try { sm.setKeySignatureUI(null); } catch (e) { /* ignore */ }
                 }
+
+                // Clear persisted score settings from app state so a stale time/key
+                // signature or manual shift from a previously-loaded piece doesn't
+                // leak into the share URL for this new file. (URL-driven restoration,
+                // if any, happens after parseMidiFile via applyScoreSettings() and
+                // will re-populate these as needed.)
+                const state = this.app.state;
+                state.timeSignature = null;
+                state.keySignature = null;
+                state.scoreShiftTicks = 0;
+                state.scoreShiftUnit = '4';
             } catch (e) {
                 console.warn('Failed to reset score UI after loading file:', e);
             }

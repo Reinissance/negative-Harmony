@@ -61,6 +61,14 @@ class NegativeHarmonyApp {
             mode: 2,
             /** @type {number} Inversion scope: 1=per octave, 2=per voice range */
             perOktave: 2,
+            /** @type {Array|null} Manually-set score time signature [numerator, denominator], or null for auto-detect */
+            timeSignature: null,
+            /** @type {number|null} Manually-set score key signature (-6..6 flats/sharps), or null for auto-detect */
+            keySignature: null,
+            /** @type {number} Net cumulative manual tick shift applied to the score start */
+            scoreShiftTicks: 0,
+            /** @type {string} Rhythmic unit used for the last manual score-start shift ("64","32","16","8","4") */
+            scoreShiftUnit: "4",
         };
     }
 

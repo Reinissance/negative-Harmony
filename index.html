@@ -63,7 +63,7 @@
       <div style="display: flex; width: 100%;">
         <a class="remain" style="display: none; box-shadow: 0 0 10px rgb(215, 118, 21); width: 50px; height: 50px; background-color: rgba(255, 255, 255, 0.359); border-radius: 3px; border: 1px solid white;" href="javascript:void(0);" onclick="app.modules.settingsManager.shareAndCopy();" title="Image from freeiconspng.com: https://www.freeiconspng.com/img/40132" id="hiddenShareButton"><img src="https://www.freeiconspng.com/uploads/share-sharing-icon-29.png" width="50" alt="Share, sharing icon"/></a>
         <button class="btn btn-outline-danger remain" id="playMidi" style="margin-left: 20px; min-height: 50px; color: rgb(255, 119, 0); font-weight: bold; background-color: rgba(156, 0, 0, 0.622); text-shadow: 0 0 15px rgb(63, 18, 18); flex-grow: 1;">Play MIDI</button>
-        <button class="btn btn-outline-light" id="showScore" style="display:none; margin-left: 20px; min-height: 50px; display: flex; align-items: center; justify-content: center;" onclick="app.modules.scoreManager.showScore(true);">Score</button>
+        <button class="btn btn-outline-light" id="showScore" style="display: none; margin-left: 20px; min-height: 50px; align-items: center; justify-content: center;" onclick="app.modules.scoreManager.showScore(true);">Score</button>
       </div>
     </div>
     <input type="range" id="progress-input" style="width: 100%; display: none;" min="0" max="100" step="0.01" value="0" class="form-range">
@@ -117,7 +117,29 @@
             <option value="2">halves</option>
           </select>
         </div>
+
+        <!-- Key signature box (styled like footer) -->
+        <div class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display:flex; align-items:center; gap:8px;">
+          <span style="color: #fff; margin-left:6px;">Key Signature:</span>
+          <select id="keySignature" class="form-select" style="width:160px; margin-left:6px;" onchange="app && app.modules && app.modules.scoreManager && app.modules.scoreManager.onKeySignatureSelectChange()">
+            <option value="auto" selected>Auto (from MIDI)</option>
+            <option value="-6">Gb / Ebm (6 flats)</option>
+            <option value="-5">Db / Bbm (5 flats)</option>
+            <option value="-4">Ab / Fm (4 flats)</option>
+            <option value="-3">Eb / Cm (3 flats)</option>
+            <option value="-2">Bb / Gm (2 flats)</option>
+            <option value="-1">F / Dm (1 flat)</option>
+            <option value="0">C / Am (no sharps/flats)</option>
+            <option value="1">G / Em (1 sharp)</option>
+            <option value="2">D / Bm (2 sharps)</option>
+            <option value="3">A / F#m (3 sharps)</option>
+            <option value="4">E / C#m (4 sharps)</option>
+            <option value="5">B / G#m (5 sharps)</option>
+            <option value="6">F# / D#m (6 sharps)</option>
+          </select>
+        </div>
       </div>
+
     </div>
   </div>
   <div class="widget container accordion" id="accordionsContainer" style="margin-top: 20px;">
