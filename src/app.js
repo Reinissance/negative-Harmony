@@ -329,7 +329,7 @@ class NegativeHarmonyApp {
             // Per-voice negative harmony transformation
             // Uses the range of each voice to position the transformation axis
             if (!this.modules.transport.parts[channel]) {
-                console.warn(`No note range data for channel ${channel}:`, this.modules.transport.parts);
+                console.warn(`App: No note range data for channel ${channel}:`, this.modules.transport.parts);
                 // Fallback to per-octave behavior
                 this.modules.transport.forceUpdateChannel = true;
                 return this.negativeHarmonyTransform(note, 1, negRoot, channel);

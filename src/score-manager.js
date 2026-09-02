@@ -165,9 +165,10 @@ class ScoreManager {
      * Generates ABC notation string from a MIDI file using the WASM converter
      * @async
      * @param {Object} midiFile - MIDI file object to convert
+     * @param {Array|number|string|null} timeSignature - Optional time signature to force (e.g. [4,4] or '4/4' or 4)
      * @returns {Promise<string>} Generated ABC notation string
      */
-    async generateABCStringfromMIDI(midiFile) {
+    async generateABCStringfromMIDI(midiFile, timeSignature = null) {
         if (!this.midi2abcReady || !this.midi2abc || !this.midi2abc.FS) {
             console.error('midi2abc WASM module not ready');
             this.handleAbcGenerationFailure('WASM module not ready');
@@ -197,7 +198,20 @@ class ScoreManager {
             const writtenData = this.midi2abc.FS.readFile('/input.mid');
             
             // Call midi2abc conversion with optimized flags for score display
-            const result = this.midi2abc.callMain(['input.mid', '-sr', '4', '-bpl', '4', '-ga']);
+            // Build callMain args and include optional time signature (-m) if provided
+            const args = ['input.mid', '-sr', '4', '-bpl', '4', '-ga'];
+            if (timeSignature) {
+                let tsString = '';
+                if (Array.isArray(timeSignature) && timeSignature.length >= 2) {
+                    tsString = `${timeSignature[0]}/${timeSignature[1]}`;
+                } else if (typeof timeSignature === 'number') {
+                    tsString = `${timeSignature}/4`;
+                } else {
+                    tsString = String(timeSignature);
+                }
+                args.push('-m', tsString);
+            }
+            const result = this.midi2abc.callMain(args);
 
             // Get the output (this should be captured by the print function)
             let abcOutput = this.abcOutput;
@@ -850,25 +864,25 @@ class ScoreManager {
      */
     renderScore(containerId = 'score') {
         if (!this.abcjs || !this.abcString.trim()) {
-            console.warn('No ABC data or abcjs library to render');
-            return;
-        }
+             console.warn('No ABC data or abcjs library to render');
+             return;
+         }
 
-        try {
-            // Clear only the score content area, not the entire container
-            const scoreElement = document.getElementById(containerId);
-            if (!scoreElement) return;
-            
-            scoreElement.innerHTML = ''; // Clear previous score content
-            
-            // Set maximum height constraint
-            const maxHeight = window.innerHeight - 150;
-            scoreElement.style.maxHeight = `${maxHeight}px`;
-            scoreElement.style.overflowY = 'auto';
-            scoreElement.style.overflowX = 'hidden';
-            
-            // Enhanced render options for percussion support
-            const renderOptions = {
+         try {
+             // Clear only the score content area, not the entire container
+             const scoreElement = document.getElementById(containerId);
+             if (!scoreElement) return;
+             
+             scoreElement.innerHTML = ''; // Clear previous score content
+             
+             // Set maximum height constraint
+             const maxHeight = window.innerHeight - 150;
+             scoreElement.style.maxHeight = `${maxHeight}px`;
+             scoreElement.style.overflowY = 'auto';
+             scoreElement.style.overflowX = 'hidden';
+             
+             // Enhanced render options for percussion support
+             const renderOptions = {
                 responsive: 'resize',
                 staffwidth: 740,
                 scale: 1.0,
@@ -877,20 +891,29 @@ class ScoreManager {
                 // Add percussion-specific options
                 percussion: true,
                 drumBars: 1
-            };
-            
-            const visualOptions = {
+             };
+             
+             const visualOptions = {
                 add_classes: true,
                 staffwidth: 740,
                 responsive: 'resize',
                 // Enable drum notation
                 displayPercussion: true
-            };
-            
-            this.abcjs.renderAbc(containerId, this.abcString, renderOptions, visualOptions);
-            
-            // Scale the rendered content to fit height constraint
-            setTimeout(() => {
+             };
+             
+             // Ensure displayed ABC reflects active Tone time signature if present
+             let abcToRender = this.abcString;
+             try {
+                 const ts = window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature;
+                 if (ts) {
+                     abcToRender = this.injectTimeSignatureIntoABC(abcToRender, ts);
+                 }
+             } catch (e) { /* ignore */ }
+
+             this.abcjs.renderAbc(containerId, abcToRender, renderOptions, visualOptions);
+             
+             // Scale the rendered content to fit height constraint
+             setTimeout(() => {
                 const scoreElement = document.getElementById(containerId);
                 if (scoreElement) {
                     // Get the rendered SVG element
@@ -1323,23 +1346,34 @@ class ScoreManager {
             console.warn('No ABC data available for score following');
             return '';
         }
-
-        // console.log(`=== generateScoreFollower called with startBar=${startBar} ===`);
-        // console.log('Full ABC string length:', this.abcString.length);
-        // console.log('First 200 chars of ABC:', this.abcString.substring(0, 200));
         
-        // Always try to extract exactly 4 bars, no fallback to full score
-        const followingABC = this.extractBarsFromABC(this.abcString, startBar, 4);
-        
-        // console.log('Extraction result length:', followingABC.length);
-        // console.log('Extraction result:', followingABC);
-        
-        if (!followingABC || !followingABC.trim()) {
-            console.warn(`Bar extraction returned empty result for bars ${startBar}-${startBar + 3}`);
-            return '';
+        // Ensure totalBars is available
+        if (!this.totalBars || typeof this.totalBars !== 'number' || this.totalBars <= 0) {
+            this.totalBars = this.getTotalBarsFromABC();
         }
         
-        // console.log('Extracted ABC length:', followingABC.length);
+        const remainingBars = Math.max(0, this.totalBars - startBar);
+        if (remainingBars <= 0) {
+            // nothing left to show
+            return '';
+        }
+
+        // Request up to 4 bars but not more than remain
+        let numBars = Math.min(4, remainingBars);
+        let followingABC = '';
+
+        // Try to extract; if empty, try with fewer bars down to 1
+        while (numBars > 0) {
+            followingABC = this.extractBarsFromABC(this.abcString, startBar, numBars);
+            if (followingABC && followingABC.trim()) break;
+            numBars--;
+        }
+
+        if (!followingABC || !followingABC.trim()) {
+            console.warn(`Bar extraction returned empty result for startBar ${startBar}`);
+            return '';
+        }
+
         return followingABC;
     }
 
@@ -1360,7 +1394,13 @@ class ScoreManager {
 
         // Temporarily store original ABC and use following ABC
         const originalABC = this.abcString;
-        this.abcString = followingABC;
+        // Inject current Tone time signature into the follower ABC so the displayed bars match playback
+        let followerWithTS = followingABC;
+        try {
+            const ts = window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature;
+            if (ts) followerWithTS = this.injectTimeSignatureIntoABC(followingABC, ts);
+        } catch (e) { /* ignore */ }
+        this.abcString = followerWithTS;
         
         // Render the score follower
         this.renderScore(containerId);
@@ -1372,10 +1412,151 @@ class ScoreManager {
     }
 
     /**
+     * Reloads the score and updates the display
+     * @param {string} containerId - Container element ID (default: 'score')
+     */
+    async reloadScore(containerId = 'score') {
+        // console.log('Reloading score...');
+        const scoreElement = document.getElementById(containerId);
+        if (!scoreElement) return;
+
+        // Show temporary message while reloading
+        scoreElement.innerHTML = '<p>Reloading score...</p>';
+
+        // Regenerate ABC from current MIDI
+        const transport = this.app.modules.transport;
+        let abcNotation = '';
+        if (transport && transport.createCurrentMidi) {
+            const currentMidi = transport.createCurrentMidi();
+            if (currentMidi) {
+                // prefer UI selects, then Tone.Transport, then MIDI header
+                const ts = this.getActiveTimeSignature();
+                abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts);
+            }
+        }
+
+        if (!abcNotation) {
+            scoreElement.innerHTML = '<p>Failed to reload score data</p>';
+            return;
+        }
+
+        // Update the stored abcString with the regenerated notation
+        this.abcString = abcNotation;
+
+        // If score follower is active, update follower window; otherwise, full render
+        if (this.scoreFollowerActive) {
+            this.renderScoreFollower(containerId, this.currentBarStart);
+        } else {
+            this.renderScore(containerId);
+        }
+    }
+
+    /**
+     * Inject or replace M: time signature line in an ABC string
+     * @param {string} abc - ABC notation
+     * @param {Array|number|string} ts - time signature (e.g. [4,4] or '4/4' or 4)
+     * @returns {string} updated ABC string
+     */
+    injectTimeSignatureIntoABC(abc, ts) {
+        if (!abc || !abc.trim() || !ts) return abc;
+        let num, den;
+        if (Array.isArray(ts) && ts.length >= 2) {
+            [num, den] = ts;
+        } else if (typeof ts === 'number') {
+            num = ts; den = 4;
+        } else if (typeof ts === 'string') {
+            const parts = ts.split('/');
+            num = parseInt(parts[0], 10) || 4;
+            den = parseInt(parts[1], 10) || 4;
+        } else {
+            return abc;
+        }
+        const ms = `M:${num}/${den}`;
+        // Replace existing M: line if present in header, otherwise insert after X: or at top of header
+        const lines = abc.split('\n');
+        let replaced = false;
+        for (let i = 0; i < Math.min(30, lines.length); i++) {
+            if (/^\s*M:/.test(lines[i])) {
+                lines[i] = ms;
+                replaced = true;
+                break;
+            }
+            // Insert after the X: line if header has no M: and we reach an early header end
+            if (/^\s*K:/.test(lines[i]) && !replaced) {
+                // insert M: before the K: line to keep header order
+                lines.splice(i, 0, ms);
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            // If no header context found, prepend M: at top
+            lines.unshift(ms);
+        }
+        return lines.join('\n');
+    }
+
+    /**
+     * Extracts the current MIDI from the transport module,
+     * regenerates the ABC string, and returns the updated ABC notation.
+     * @returns {Promise<string>} - The updated ABC notation.
+     */
+    async updateMidiAndGetABC() {
+        const transport = this.app.modules.transport;
+        if (!transport || !transport.createCurrentMidi) {
+            console.error('Transport module or createCurrentMidi function not available');
+            return '';
+        }
+
+        try {
+            // Extract the current MIDI file
+            const midiFile = transport.createCurrentMidi();
+            if (!midiFile) {
+                console.error('Failed to create current MIDI from transport');
+                return '';
+            }
+
+            // prefer UI selects, then Tone.Transport, then MIDI header
+            const ts = this.getActiveTimeSignature();
+            const abcString = await this.generateABCStringfromMIDI(midiFile, ts);
+            return abcString;
+        } catch (error) {
+            console.error('Error updating MIDI and generating ABC:', error);
+            return '';
+        }
+    }
+
+    /**
+     * Advances the score follower by a specified number of bars,
+     * regenerates the ABC if the MIDI has changed, and updates the display.
+     * @param {number} bars - Number of bars to advance (can be negative)
+     */
+    async advanceScoreFollower(bars = 4) {
+        // Update the MIDI and get the latest ABC notation
+        const updatedABC = await this.updateMidiAndGetABC();
+        if (updatedABC) {
+            this.abcString = updatedABC;
+        }
+
+        // Calculate the new starting bar, ensuring it stays within bounds
+        const newStart = Math.max(0, this.currentBarStart + bars);
+        this.currentBarStart = newStart;
+
+        // Render the updated score follower
+        this.renderScoreFollower('score', this.currentBarStart);
+
+        // Update the display
+        const display = document.getElementById('currentBarDisplay');
+        if (display) {
+            display.textContent = this.currentBarStart;
+        }
+    }
+
+    /**
      * Resets the score follower to the beginning of the piece
      * @param {string} containerId - Container element ID (default: 'score')
      */
-    resetScoreFollower(containerId = 'score') {
+    async resetScoreFollower(containerId = 'score') {
         // console.log('Resetting score follower to beginning');
         this.currentBarStart = 0;
         this.lastPolledBar = null; // Reset polling state
@@ -1388,87 +1569,96 @@ class ScoreManager {
             if (transport && transport.createCurrentMidi) {
                 const currentMidi = transport.createCurrentMidi();
                 if (currentMidi) {
-                    const abcNotation = this.generateABCStringfromMIDI(currentMidi);
+                    // prefer UI selects, then Tone.Transport, then MIDI header
+                    const ts = this.getActiveTimeSignature();
+                    const abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts);
                     if (!abcNotation) {
-                        const scoreElement = document.getElementById(containerId);
-                        if (scoreElement) {
-                            scoreElement.innerHTML = '<p>Could not generate score data</p>';
-                        }
-                        return;
-                    }
-                    // Update the stored abcString with the regenerated notation
-                    this.abcString = abcNotation;
-                }
-                else {
-                    console.warn('No current MIDI available for regeneration');
-                }
-            }
-            this.renderScoreFollower(containerId, this.currentBarStart);
-        }
-        else {
-            setTimeout(() => {
-                this.renderScoreFollower(containerId, this.currentBarStart);
-            }, 500);
-        }
+                         const scoreElement = document.getElementById(containerId);
+                         if (scoreElement) {
+                             scoreElement.innerHTML = '<p>Could not generate score data</p>';
+                         }
+                         return;
+                     }
+                     // Update the stored abcString with the regenerated notation
+                     this.abcString = abcNotation;
+                 }
+                 else {
+                     console.warn('No current MIDI available for regeneration');
+                 }
+             }
+             this.renderScoreFollower(containerId, this.currentBarStart);
+         }
+         else {
+             setTimeout(() => {
+                 this.renderScoreFollower(containerId, this.currentBarStart);
+             }, 500);
+         }
 
-        // Update display
-        const display = document.getElementById('currentBarDisplay');
-        if (display) {
-            display.textContent = this.currentBarStart;
-        }
-    }
+         // Update display
+         const display = document.getElementById('currentBarDisplay');
+         if (display) {
+             display.textContent = this.currentBarStart;
+         }
+     }
 
     /**
      * Displays the MIDI score with optional score following
      * @param {boolean} useScoreFollowing - Whether to enable real-time score following
      */
-    showMidiScore(useScoreFollowing = false) {
-        const scoreDiv = document.getElementById('score');
-        
-        if (!scoreDiv || !this.app.modules.transport.originalMidi) {
-            console.error('no file loaded or score elements not found');
-            return;
-        }
-        
-        // Check if we have a valid ABC string already
-        if (!this.abcString || this.abcString.trim().length === 0) {
-            // Try to regenerate ABC
-            try {
-                const transport = this.app.modules.transport;
-                if (!transport) {
-                    console.error('Transport module not available');
-                    return;
-                }
+    async showMidiScore(useScoreFollowing = false) {
+         const scoreDiv = document.getElementById('score');
+         
+         if (!scoreDiv || !this.app.modules.transport.originalMidi) {
+             console.error('no file loaded or score elements not found');
+             return;
+         }
+         
+         // Check if we have a valid ABC string already
+         if (!this.abcString || this.abcString.trim().length === 0) {
+             // Try to regenerate ABC
+             try {
+                 const transport = this.app.modules.transport;
+                 if (!transport) {
+                     console.error('Transport module not available');
+                     return;
+                 }
 
-                const currentMidi = transport.createCurrentMidi();
-                if (!currentMidi) {
-                    console.error('Failed to create current MIDI');
-                    return;
-                }
+                 const currentMidi = transport.createCurrentMidi();
+                 if (!currentMidi) {
+                     console.error('Failed to create current MIDI');
+                     return;
+                 }
 
-                // Clear only the score content area, not the header
-                scoreDiv.innerHTML = '<p>Generating score...</p>';
+                 // Clear only the score content area, not the header
+                 scoreDiv.innerHTML = '<p>Generating score...</p>';
 
-                const abcNotation = this.generateABCStringfromMIDI(currentMidi);
-                if (!abcNotation) {
-                    // generateABCStringfromMIDI will handle the error notification
-                    return;
-                }
-            } catch (error) {
-                console.error('Error regenerating score:', error);
-                this.handleAbcGenerationFailure(`Score regeneration failed: ${error.message}`);
-                return;
-            }
-        }
-        
-        // Clear only the score content area, not the header
-        scoreDiv.innerHTML = '<p>Generating score...</p>';
-        
-        // Show the container
-        document.getElementById("showScore").style.display = 'none';
-        
-        // Use score following or regular rendering
-        if (useScoreFollowing) {
+                 // prefer UI selects, then Tone.Transport, then MIDI header
+                 const ts = this.getActiveTimeSignature();
+                 const abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts);
+                 if (!abcNotation) {
+                     // generateABCStringfromMIDI will handle the error notification
+                     return;
+                 }
+                 
+                 // Ensure UI selects reflect the used time signature
+                 try {
+                     this.setTimeSignatureUI(ts);
+                 } catch (e) { /* ignore */ }
+             } catch (error) {
+                 console.error('Error regenerating score:', error);
+                 this.handleAbcGenerationFailure(`Score regeneration failed: ${error.message}`);
+                 return;
+             }
+         }
+         
+         // Clear only the score content area, not the header
+         scoreDiv.innerHTML = '<p>Generating score...</p>';
+         
+         // Show the container
+         document.getElementById("showScore").style.display = 'none';
+         
+         // Use score following or regular rendering
+         if (useScoreFollowing) {
             // console.log('Starting score follower mode');
             
             // Determine starting bar based on playback state
@@ -1553,8 +1743,28 @@ class ScoreManager {
                 const state = this.app.state;
                 
                 // Parse the position string (format: "bars:beats:sixteenths")
-                const positionParts = position.split(':');
-                let currentBar = parseInt(positionParts[0]) || 0;
+                const positionParts = position.split(':').map(p => parseInt(p, 10) || 0);
+                const [parsedBars = 0, parsedBeats = 0, parsedSixteenths = 0] = positionParts;
+                
+                // Detect whether Tone.Transport.position uses 1-based bar numbering.
+                if (this._tonePositionOneBased === undefined) {
+                    const seconds = (window.Tone.Transport.seconds || 0);
+                    this._tonePositionOneBased = (seconds < 0.05 && parsedBars > 0);
+                }
+                
+                // Determine beats per bar (robust for number or array)
+                let beatsPerBar = 4;
+                const ts = window.Tone.Transport.timeSignature;
+                if (typeof ts === 'number') {
+                    beatsPerBar = ts;
+                } else if (Array.isArray(ts)) {
+                    beatsPerBar = ts[0] || 4;
+                }
+
+                // fractional bar index (0-based after correction)
+                let barFloat = parsedBars + (parsedBeats / Math.max(1, beatsPerBar)) + (parsedSixteenths / (Math.max(1, beatsPerBar) * 4));
+                if (this._tonePositionOneBased) barFloat = Math.max(0, barFloat - 1);
+                let currentBar = Math.max(0, Math.floor(barFloat));
                 
                 // Account for reversed playback
                 if (state.reversedPlayback) {
@@ -1562,12 +1772,13 @@ class ScoreManager {
                     if (originalMidi && originalMidi.header) {
                         const ppq = originalMidi.header.ppq || 96;
                         const timeSignature = originalMidi.header.timeSignatures?.[0]?.timeSignature || [4, 4];
-                        const [numerator] = timeSignature;
+                        const [numerator, denominator] = timeSignature;
                         
-                        // Calculate total bars in the piece
+                        // Calculate ticks per beat and per measure correctly for arbitrary time signatures
+                        const ticksPerBeat = ppq * (4 / denominator);
+                        const ticksPerMeasure = ticksPerBeat * numerator;
                         const totalTicks = originalMidi.durationTicks || 0;
-                        const ticksPerMeasure = (ppq * 4 * numerator) / 4; // Assuming 4/4 for simplicity
-                        const totalBars = Math.ceil(totalTicks / ticksPerMeasure);
+                        const totalBars = Math.ceil(totalTicks / Math.max(1, ticksPerMeasure));
                         
                         currentBar = Math.max(0, totalBars - currentBar - 1);
                     }
@@ -1671,42 +1882,34 @@ class ScoreManager {
                 return;
             }
             
-            // Get the basic bar index
-            const currentBar = this.getCurrentPlaybackBar();
-
-            // Compute an "effective" bar that may advance to the next bar
-            // if we're already far enough through the current bar.
-            let effectiveBar = currentBar;
+            // Compute fractional bar from Tone position (reuse detection logic)
+            let effectiveBar = this.getCurrentPlaybackBar();
 
             try {
                 if (window.Tone && window.Tone.Transport && typeof window.Tone.Transport.position === 'string') {
-                    const posParts = window.Tone.Transport.position.split(':').map(p => parseInt(p, 10) || 0);
-                    const [bars = 0, beats = 0, sixteenths = 0] = posParts;
+                    const parts = window.Tone.Transport.position.split(':').map(p => parseInt(p, 10) || 0);
+                    const [bars = 0, beats = 0, sixteenths = 0] = parts;
 
-                    // Determine beats per measure from Tone (robust handling for number or array)
                     let beatsPerBar = 4;
                     const ts = window.Tone.Transport.timeSignature;
-                    if (typeof ts === 'number') {
-                        beatsPerBar = ts;
-                    } else if (Array.isArray(ts)) {
-                        beatsPerBar = ts[0] || 4;
-                    }
+                    if (typeof ts === 'number') beatsPerBar = ts;
+                    else if (Array.isArray(ts)) beatsPerBar = ts[0] || 4;
 
-                    // Compute fractional progress through current bar:
-                    // progress = (beats + sixteenths/4) / beatsPerBar
-                    const progress = (beats + (sixteenths / 4)) / Math.max(1, beatsPerBar);
+                    let barFloat = bars + (beats / Math.max(1, beatsPerBar)) + (sixteenths / (Math.max(1, beatsPerBar) * 4));
+                    if (this._tonePositionOneBased) barFloat = Math.max(0, barFloat - 1);
 
-                    // If we've passed the threshold of the current bar (e.g. 60%),
-                    // treat playback as being in the next bar so the follower advances earlier.
                     const ADVANCE_THRESHOLD = 0.6;
-                    if (bars === currentBar && progress >= ADVANCE_THRESHOLD) {
-                        effectiveBar = currentBar + 1;
-                    }
+                    const progress = (beats + (sixteenths / 4)) / Math.max(1, beatsPerBar);
+                    // Use barFloat to compute current integer bar and possibly advance
+                    let currentIntBar = Math.floor(barFloat);
+                    if (progress >= ADVANCE_THRESHOLD) currentIntBar = currentIntBar + 1;
+
+                    effectiveBar = Math.max(0, currentIntBar);
                 }
             } catch (err) {
-                // silent fallback - keep effectiveBar === currentBar
+                // silent fallback - use getCurrentPlaybackBar result
             }
-            
+
             // Update only when effectiveBar has changed since last poll
             if (effectiveBar !== null && effectiveBar !== this.lastPolledBar) {
                 this.lastPolledBar = effectiveBar;
@@ -1806,8 +2009,15 @@ class ScoreManager {
         
         this.showMidiScore(useScoreFollowing);
         
-        // Sync Tone.js time signature to the ABC score (retry if ABC not yet ready)
-        this.syncToneTimeSignatureFromABC();
+        // Only sync Tone.js time signature from ABC if Tone doesn't already have one
+        try {
+            const ts = window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature;
+            if (!ts) {
+                this.syncToneTimeSignatureFromABC();
+            }
+        } catch (e) {
+            this.syncToneTimeSignatureFromABC();
+        }
 
         // Add manual controls
         this.addScoreFollowerControls(scoreContainer);
@@ -1861,7 +2071,7 @@ class ScoreManager {
 
                 const blob = new Blob([abc], { type: 'text/plain;charset=utf-8' });
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
+                               const a = document.createElement('a');
                 a.style.display = 'none';
                 a.href = url;
                 a.download = filename;
@@ -1870,12 +2080,499 @@ class ScoreManager {
                 a.remove();
                 URL.revokeObjectURL(url);
             } catch (err) {
+
                 console.error('Failed to download ABC file:', err);
                 alert('Failed to download ABC file.');
             }
         };
 
         doDownload();
+    }
+
+    /**
+     * Read active time signature from UI selects, Tone.Transport, or MIDI header.
+     * Returns [numerator, denominator]
+     */
+    getActiveTimeSignature() {
+        // prefer user UI selects if present
+        try {
+            const numEl = document.getElementById('timeSigNum');
+            const denEl = document.getElementById('timeSigDen');
+            if (numEl && denEl && numEl.value) {
+                const num = parseInt(numEl.value, 10) || 4;
+                const den = parseInt(denEl.value, 10) || 4;
+                return [Math.max(1, Math.min(16, num)), den];
+            }
+        } catch (e) { console.error('Error reading time signature from UI selects:', e); }
+
+        // fallback to Tone.Transport if available
+        try {
+            if (window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature) {
+                const ts = window.Tone.Transport.timeSignature;
+                if (Array.isArray(ts) && ts.length >= 2) return [ts[0], ts[1]];
+                if (typeof ts === 'number') return [ts, 4];
+            }
+        } catch (e) { console.error('Error reading time signature from Tone.Transport:', e); }
+
+        // fallback to MIDI header in current MIDI
+        try {
+            const transport = this.app.modules.transport;
+            if (transport && transport.createCurrentMidi) {
+                const midi = transport.createCurrentMidi();
+                if (midi && midi.header && midi.header.timeSignatures && midi.header.timeSignatures[0]) {
+                    const tsObj = midi.header.timeSignatures[0].timeSignature || midi.header.timeSignatures[0];
+                    if (Array.isArray(tsObj) && tsObj.length >= 2) return [tsObj[0], tsObj[1]];
+                    if (typeof tsObj === 'number') return [tsObj, 4];
+                }
+            }
+        } catch (e) { /* ignore */ }
+
+        return [4, 4];
+    }
+
+    /**
+     * Read UI selects and apply the selected time signature to Tone and ABC generation,
+     * then regenerate and reload the displayed score.
+     */
+    async onTimeSignatureSelectChange() {
+        try {
+            const [num, den] = this.getActiveTimeSignature();
+
+            // Try to set Tone.Transport.timeSignature as [num,den], fallback to number
+            try {
+                if (window.Tone && window.Tone.Transport) {
+                    try {
+                        window.Tone.Transport.timeSignature = [num, den];
+                    } catch (e) {
+                        // some Tone builds expect a number -> set beats per bar
+                        window.Tone.Transport.timeSignature = num;
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to apply time signature to Tone.Transport:', e);
+            }
+
+            // Regenerate ABC using the new time signature (pass to midi2abc with -m)
+            const transport = this.app.modules.transport;
+            if (transport && typeof transport.createCurrentMidi === 'function') {
+                const currentMidi = transport.createCurrentMidi();
+                if (currentMidi) {
+                    const abcNotation = await this.generateABCStringfromMIDI(currentMidi, [num, den]);
+                    if (abcNotation) {
+                        this.abcString = abcNotation;
+                        // Reload to ensure injection & rendering are consistent
+                        await this.reloadScore('score');
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Error handling time signature change:', err);
+        }
+    }
+
+    /**
+     * Sets the first musical bar information for score synchronization
+     * @param {Object} downbeat - Downbeat information from transport
+     */
+    setFirstMusicalBar(downbeat) {
+        this.firstDownbeat = downbeat;
+        
+        // If you need to show the detected downbeat in UI:
+        // console.log(`First downbeat detected at: ${downbeat.time.toFixed(2)}s (${downbeat.method})`);
+    }
+
+    /**
+     * Gets the current playback bar position from transport timing
+     * @returns {number} Current bar number (0-based)
+     */
+    getCurrentPlaybackBar() {
+        const transport = this.app.modules.transport;
+        if (!transport || !transport.playing) {
+            return 0;
+        }
+        
+        try {
+            if (window.Tone && window.Tone.Transport) {
+                // Use Tone.js position directly for more accurate timing
+                const position = window.Tone.Transport.position;
+                const state = this.app.state;
+                
+                // Parse the position string (format: "bars:beats:sixteenths")
+                const positionParts = position.split(':').map(p => parseInt(p, 10) || 0);
+                const [parsedBars = 0, parsedBeats = 0, parsedSixteenths = 0] = positionParts;
+                
+                // Detect whether Tone.Transport.position uses 1-based bar numbering.
+                if (this._tonePositionOneBased === undefined) {
+                    const seconds = (window.Tone.Transport.seconds || 0);
+                    this._tonePositionOneBased = (seconds < 0.05 && parsedBars > 0);
+                }
+                
+                // Determine beats per bar (robust for number or array)
+                let beatsPerBar = 4;
+                const ts = window.Tone.Transport.timeSignature;
+                if (typeof ts === 'number') {
+                    beatsPerBar = ts;
+                } else if (Array.isArray(ts)) {
+                    beatsPerBar = ts[0] || 4;
+                }
+
+                // fractional bar index (0-based after correction)
+                let barFloat = parsedBars + (parsedBeats / Math.max(1, beatsPerBar)) + (parsedSixteenths / (Math.max(1, beatsPerBar) * 4));
+                if (this._tonePositionOneBased) barFloat = Math.max(0, barFloat - 1);
+                let currentBar = Math.max(0, Math.floor(barFloat));
+                
+                // Account for reversed playback
+                if (state.reversedPlayback) {
+                    const originalMidi = transport.originalMidi;
+                    if (originalMidi && originalMidi.header) {
+                        const ppq = originalMidi.header.ppq || 96;
+                        const timeSignature = originalMidi.header.timeSignatures?.[0]?.timeSignature || [4, 4];
+                        const [numerator, denominator] = timeSignature;
+                        
+                        // Calculate ticks per beat and per measure correctly for arbitrary time signatures
+                        const ticksPerBeat = ppq * (4 / denominator);
+                        const ticksPerMeasure = ticksPerBeat * numerator;
+                        const totalTicks = originalMidi.durationTicks || 0;
+                        const totalBars = Math.ceil(totalTicks / Math.max(1, ticksPerMeasure));
+                        
+                        currentBar = Math.max(0, totalBars - currentBar - 1);
+                    }
+                }
+                
+                return Math.max(0, currentBar);
+            }
+        } catch (error) {
+            console.warn('Could not get current playback bar:', error);
+        }
+        
+        return 0;
+    }
+
+
+
+    /**
+     * Updates the score follower to show the current playback position
+     * @param {string} containerId - Container element ID
+     * @param {number} barNumber - Current bar number being played
+     * @param {boolean} immediately - Whether to update immediately without debouncing
+     */
+    updateScoreFollower(containerId, barNumber, immediately = false) {
+
+        // Update current bar display
+        const display = document.getElementById('currentBarDisplay');
+        if (display) {
+            display.textContent = `Bar: ${barNumber + 1} (Window: ${this.currentBarStart + 1}-${this.currentBarStart + 4})`;
+        }
+        
+        // Calculate which 4-bar window this bar belongs to
+        let targetWindow = Math.floor(barNumber / 4) * 4;
+
+        // Update if we've moved to a different 4-bar window or immediately requested
+        if (targetWindow !== this.currentBarStart || immediately) {
+            if (this.app.state.reversedPlayback) {
+                targetWindow = Math.abs(this.totalBars - targetWindow);
+                if (targetWindow === this.currentBarStart) {
+                    return; // No change
+                }
+            }
+            this.currentBarStart = targetWindow;
+            // console.log(`Score follower updating to bars ${this.currentBarStart}-${this.currentBarStart + 3} (current bar: ${barNumber})`);
+            
+            // Clear any pending updates
+            if (this.updateTimeout) {
+                clearTimeout(this.updateTimeout);
+                this.updateTimeout = null;
+            }
+            
+            // Update immediately without delay
+            this.renderScoreFollower(containerId, this.currentBarStart);
+        }
+    }
+
+    /**
+     * Starts score following mode with real-time playback synchronization
+     * @param {string} containerId - Container element ID (default: 'score')
+     * @param {number} startBar - Starting bar number (default: 0)
+     */
+    startScoreFollowing(containerId = 'score', startBar = 0) {
+        // console.log(`Starting score following at bar ${startBar}...`);
+        this.scoreFollowerActive = true;
+        
+        // Get the actual current playback position instead of using startBar parameter
+        const currentBar = this.getCurrentPlaybackBar();
+        this.currentBarStart = Math.floor(currentBar / 4) * 4; // Align to 4-bar boundaries
+        this.lastPolledBar = null; // Reset polling state
+        
+        // console.log(`Score follower starting at bar ${currentBar}, window: ${this.currentBarStart}-${this.currentBarStart + 3}`);
+        
+        // Initial render with immediate update
+        this.renderScoreFollower(containerId, this.currentBarStart);
+        
+        // console.log('Score follower ready - starting polling immediately');
+        
+        // Start polling immediately rather than waiting
+        this.startPollingForPlayback(containerId);
+    }
+
+    /**
+     * Starts polling the transport for playback position updates
+     * @param {string} containerId - Container element ID for updates
+     */
+    startPollingForPlayback(containerId) {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+        }
+        
+        if (!this.scoreFollowerActive) {
+            return;
+        }
+
+        // Start polling immediately with higher frequency
+        this.pollingInterval = setInterval(() => {
+            const transport = this.app.modules.transport;
+            
+            // Only poll if transport is actually playing
+            if (!transport || !transport.playing) {
+                this.stopPollingForPlayback();
+                return;
+            }
+            
+            // Compute fractional bar from Tone position (reuse detection logic)
+            let effectiveBar = this.getCurrentPlaybackBar();
+
+            try {
+                if (window.Tone && window.Tone.Transport && typeof window.Tone.Transport.position === 'string') {
+                    const parts = window.Tone.Transport.position.split(':').map(p => parseInt(p, 10) || 0);
+                    const [bars = 0, beats = 0, sixteenths = 0] = parts;
+
+                    let beatsPerBar = 4;
+                    const ts = window.Tone.Transport.timeSignature;
+                    if (typeof ts === 'number') beatsPerBar = ts;
+                    else if (Array.isArray(ts)) beatsPerBar = ts[0] || 4;
+
+                    let barFloat = bars + (beats / Math.max(1, beatsPerBar)) + (sixteenths / (Math.max(1, beatsPerBar) * 4));
+                    if (this._tonePositionOneBased) barFloat = Math.max(0, barFloat - 1);
+
+                    const ADVANCE_THRESHOLD = 0.6;
+                    const progress = (beats + (sixteenths / 4)) / Math.max(1, beatsPerBar);
+                    // Use barFloat to compute current integer bar and possibly advance
+                    let currentIntBar = Math.floor(barFloat);
+                    if (progress >= ADVANCE_THRESHOLD) currentIntBar = currentIntBar + 1;
+
+                    effectiveBar = Math.max(0, currentIntBar);
+                }
+            } catch (err) {
+                // silent fallback - use getCurrentPlaybackBar result
+            }
+
+            // Update only when effectiveBar has changed since last poll
+            if (effectiveBar !== null && effectiveBar !== this.lastPolledBar) {
+                this.lastPolledBar = effectiveBar;
+                // Update immediately without timeout
+                this.updateScoreFollower(containerId, effectiveBar);
+            }
+        }, 50); // Even more frequent polling for better responsiveness
+    }
+
+    /**
+     * Stops polling for playback position when playback ends
+     */
+    stopPollingForPlayback() {
+        if (this.pollingInterval) {
+            // console.log('Stopping score following polling (playback stopped)');
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
+    }
+
+    /**
+     * Stops all score following activity and cleans up resources
+     */
+    stopScoreFollowing() {
+        // console.log('Stopping score following...');
+        this.scoreFollowerActive = false;
+        this.lastPolledBar = null;
+        
+        // Clear any pending updates
+        if (this.updateTimeout) {
+            clearTimeout(this.updateTimeout);
+            this.updateTimeout = null;
+        }
+        
+        // Stop polling
+        this.stopPollingForPlayback();
+        
+        // Remove controls
+        const controls = document.querySelector('.score-follower-controls');
+        if (controls) {
+            controls.remove();
+        }
+    }
+
+    /**
+     * Manually advances the score follower by a specified number of bars
+     * @param {string} containerId - Container element ID (default: 'score')
+     * @param {number} bars - Number of bars to advance (can be negative, default: 4)
+     */
+    advanceScoreFollower(containerId = 'score', bars = 4) {
+        const newStart = Math.max(0, this.currentBarStart + bars);
+        
+        // Basic bounds checking - don't go beyond reasonable limits
+        if (newStart >= 0) {
+            this.currentBarStart = newStart;
+            // console.log(`Manually advancing to bar ${this.currentBarStart}`);
+            this.renderScoreFollower(containerId, this.currentBarStart);
+            
+            // Update display
+            const display = document.getElementById('currentBarDisplay');
+            if (display) {
+                display.textContent = this.currentBarStart;
+            }
+        }
+    }
+
+    /**
+     * Hides the score display and cleans up score following resources
+     */
+    hideScore() {
+        // console.log('Hiding score and cleaning up score follower');
+        this.stopScoreFollowing();
+        this.scoreShown = false;
+        this.abcString = "";
+
+        const scoreContainer = document.getElementById('scoreContainer');
+        if (scoreContainer) {
+            scoreContainer.style.display = 'none';
+            document.getElementById("showScore").style.display = 'block';
+        }
+    }
+
+    /**
+     * Shows the score with automatic score following enabled
+     */
+    showScore() {
+        this.scoreShown = true;
+        const scoreContainer = document.getElementById('scoreContainer');
+        if (scoreContainer) {
+            scoreContainer.style.display = 'block';
+            document.getElementById("showScore").style.display = 'none';
+        }
+        
+        // Always use score following when showing the score
+        const transport = this.app.modules.transport;
+        const useScoreFollowing = true; // Always enable score following
+        
+        this.showMidiScore(useScoreFollowing);
+        
+        // Only sync Tone.js time signature from ABC if Tone doesn't already have one
+        try {
+            const ts = window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature;
+            if (!ts) {
+                this.syncToneTimeSignatureFromABC();
+            }
+        } catch (e) {
+            this.syncToneTimeSignatureFromABC();
+        }
+
+        // Add manual controls
+        this.addScoreFollowerControls(scoreContainer);
+    }
+
+    /**
+     * Debug method to check synchronization between score and playback
+     */
+    debugCurrentPosition() {
+        const transport = this.app.modules.transport;
+        if (transport && transport.playing) {
+            const tonePosition = window.Tone.Transport.position;
+            const calculatedBar = this.getCurrentPlaybackBar();
+            const currentWindow = Math.floor(calculatedBar / 4) * 4;
+            
+            console.log('=== SCORE SYNC DEBUG ===');
+            console.log('Tone.Transport.position:', tonePosition);
+            console.log('Calculated bar:', calculatedBar);
+            console.log('Current 4-bar window:', `${currentWindow}-${currentWindow + 3}`);
+            console.log('Score showing window:', `${this.currentBarStart}-${this.currentBarStart + 3}`);
+            console.log('========================');
+        }
+    }
+
+    /**
+     * Download current ABC notation as a file named "adcScore.abc".
+     * Regenerates ABC from current MIDI if needed.
+     */
+    downloadABC() {
+        const filename = 'adcScore.abc';
+        const doDownload = async () => {
+            try {
+                let abc = (this.abcString && this.abcString.trim()) ? this.abcString : '';
+
+                // Try to regenerate if empty
+                if (!abc) {
+                    const transport = this.app?.modules?.transport;
+                    if (transport && typeof transport.createCurrentMidi === 'function') {
+                        const midi = transport.createCurrentMidi();
+                        if (midi) {
+                            abc = await this.generateABCStringfromMIDI(midi);
+                        }
+                    }
+                }
+
+                if (!abc || !abc.trim()) {
+                    // Minimal user feedback if no ABC data is available
+                    alert('No ABC data available to download.');
+                    return;
+                }
+
+                const blob = new Blob([abc], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                               const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            } catch (err) {
+
+                console.error('Failed to download ABC file:', err);
+                alert('Failed to download ABC file.');
+            }
+        };
+
+        doDownload();
+    }
+
+    /**
+     * Set UI selects to reflect a given time signature (array [num,den] or number)
+     * @param {Array|number|null} ts
+     */
+    setTimeSignatureUI(ts) {
+        const numEl = document.getElementById('timeSigNum');
+        const denEl = document.getElementById('timeSigDen');
+        if (!numEl || !denEl) return;
+
+        let num = 4, den = 4;
+        if (Array.isArray(ts) && ts.length >= 2) {
+            num = ts[0];
+            den = ts[1];
+        } else if (typeof ts === 'number') {
+            num = ts;
+            den = 4;
+        } else if (typeof ts === 'string') {
+            const parts = ts.split('/');
+            if (parts.length === 2) {
+                num = parseInt(parts[0], 10) || 4;
+                den = parseInt(parts[1], 10) || 4;
+            }
+        }
+
+        // clamp numerator between 1..16
+        num = Math.max(1, Math.min(16, num));
+        // set UI values if present in options
+        numEl.value = String(num);
+        denEl.value = String(den);
     }
 }
 

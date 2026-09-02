@@ -74,27 +74,49 @@
         <h4 style="margin: 0;">Music Score</h4>
         <div style="display:flex; gap:8px;align-items:center;">
           <button class="btn btn-outline-success" id="downloadAbc" onclick="app.modules.scoreManager.downloadABC();">Download ABC</button>
-          <button class="btn btn-outline-danger btn-sm" onclick="app.modules.scoreManager.hideScore();">Close</button>
+          <button class="btn btn-outline-light" onclick="app.modules.scoreManager.hideScore();">Close</button>
         </div>
       </div>
       <div style="display: flex; justify-content: center;">
         <div id="score" style="overflow-x: auto; max-width: 500px; position: relative; z-index: 1; background-color: rgba(255, 228, 196, 0.766);"></div>
       </div>
-      <div id="score-footer" class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; margin-top:10px; display:flex; align-items:center; gap:8px;">
-        <span style="color: #fff;">adjust score start manually:</span>
-        <select id="scoreShiftUnit" class="form-select" style="width:160px;">
-          <option value="16">sixteenth</option>
-          <option value="8">eighth</option>
-          <option value="4" selected>quarter</option>
-        </select>
-        <button class="btn btn-outline-light btn-sm" id="shiftScoreBack"
-          onclick="app.modules.transport.adjustScoreStart(-1, document.getElementById('scoreShiftUnit').value)">
-          Shift Start ←
-        </button>
-        <button class="btn btn-outline-light btn-sm" id="shiftScoreForward"
-          onclick="app.modules.transport.adjustScoreStart(1, document.getElementById('scoreShiftUnit').value)">
-          Shift Start →
-        </button>
+      <div id="score-footer" class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between;">
+        <!-- Shift controls box (styled like footer) -->
+        <div class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display:flex; align-items:center; gap:8px;">
+          <span style="color: #fff;">adjust score start manually:</span>
+          <select id="scoreShiftUnit" class="form-select" style="width:160px;">
+            <option value="64">sixty-fourth</option>
+            <option value="32">thirty-second</option>
+            <option value="16">sixteenth</option>
+            <option value="8">eighth</option>
+            <option value="4" selected>quarter</option>
+          </select>
+          <button class="btn btn-outline-light btn-sm" id="shiftScoreBack"
+            onclick="app.modules.transport.adjustScoreStart(-1, document.getElementById('scoreShiftUnit').value)">
+            Shift Start ←
+          </button>
+          <button class="btn btn-outline-light btn-sm" id="shiftScoreForward"
+            onclick="app.modules.transport.adjustScoreStart(1, document.getElementById('scoreShiftUnit').value)">
+            Shift Start →
+          </button>
+        </div>
+
+        <!-- Time signature box (styled like footer) -->
+        <div class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display:flex; align-items:center; gap:8px;">
+          <span style="color: #fff; margin-left:6px;">Time Signature:</span>
+          <select id="timeSigNum" class="form-select" style="width:100px; margin-left:6px;" onchange="app && app.modules && app.modules.scoreManager && app.modules.scoreManager.onTimeSignatureSelectChange()">
+            <option>1</option><option>2</option><option>3</option><option>4</option>
+            <option>5</option><option>6</option><option>7</option><option>8</option>
+            <option>9</option><option>10</option><option>11</option><option>12</option>
+            <option>13</option><option>14</option><option>15</option><option>16</option>
+          </select>
+          <select id="timeSigDen" class="form-select" style="width:140px; margin-left:6px;" onchange="app && app.modules && app.modules.scoreManager && app.modules.scoreManager.onTimeSignatureSelectChange()">
+            <option value="16">sixteenths</option>
+            <option value="8">eights</option>
+            <option value="4" selected>fourths</option>
+            <option value="2">halves</option>
+          </select>
+        </div>
       </div>
     </div>
   </div>

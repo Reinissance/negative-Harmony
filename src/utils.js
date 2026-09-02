@@ -57,19 +57,19 @@ class Utils {
             downloadButton.style.display = active ? "inline-block" : "none";
         }
         
-        const showScore = document.getElementById('showScore');
-        if (showScore) {
-            if (active) {
-                const scoreManager = window.app?.modules?.scoreManager;
-                if (scoreManager?.scoreAvailable) {
-                    showScore.style.display = "inline-block";
-                } else {
-                    showScore.style.display = "none";
-                }
-            } else {
-                showScore.style.display = "none";
-            }
-        }
+        // const showScore = document.getElementById('showScore');
+        // if (showScore) {
+        //     if (active) {
+        //         const scoreManager = window.app?.modules?.scoreManager;
+        //         if (scoreManager?.scoreAvailable) {
+        //             showScore.style.display = "inline-block";
+        //         } else {
+        //             showScore.style.display = "none";
+        //         }
+        //     } else {
+        //         showScore.style.display = "none";
+        //     }
+        // }
     }
 
     static createElementWithAttributes(tagName, attributes = {}, textContent = '') {

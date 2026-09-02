@@ -199,8 +199,29 @@ class MidiManager {
             this.app.bpm = 120.0;
         }
         
-        // Synchronize Tone.js transport with file tempo
-        Tone.Transport.bpm.value = this.app.bpm;
+        // Extract time signature from MIDI header if present and apply to Tone.Transport
+        try {
+            if (midiData.header.timeSignatures && midiData.header.timeSignatures.length > 0) {
+                const tsObj = midiData.header.timeSignatures[0];
+                const ts = tsObj && (tsObj.timeSignature || tsObj);
+                if (ts) {
+                    if (Array.isArray(ts) && ts.length >= 2) {
+                        if (window.Tone && window.Tone.Transport) {
+                            window.Tone.Transport.timeSignature = ts;
+                        }
+                    } else if (typeof ts === 'number') {
+                        if (window.Tone && window.Tone.Transport) {
+                            window.Tone.Transport.timeSignature = ts;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to set Tone.Transport.timeSignature from MIDI header:', e);
+        }
+        
+         // Synchronize Tone.js transport with file tempo
+         Tone.Transport.bpm.value = this.app.bpm;
 
         // Reset playback speed to normal
         const transport = this.app.modules.transport;
@@ -224,6 +245,35 @@ class MidiManager {
         if (transport && !(midiData === this.file)) {
             this.file = midiData; // Store reference to avoid re-processing
             transport.scheduleMIDIEvents(midiData);
+
+            // Reset user-modified score settings when loading a new file
+            try {
+                // Reset score shift selector to default quarter-note
+                const shiftEl = document.getElementById('scoreShiftUnit');
+                if (shiftEl) shiftEl.value = '4';
+
+                // Reset score manager state & time signature UI
+                const sm = this.app && this.app.modules && this.app.modules.scoreManager;
+                if (sm) {
+                    // stop any active follower and reset window
+                    try { sm.stopScoreFollowing(); } catch (e) { /* ignore */ }
+                    sm.currentBarStart = 0;
+
+                    // Prefer MIDI header TS, else Tone.Transport, else default
+                    let ts = null;
+                    try {
+                        if (midiData.header && midiData.header.timeSignatures && midiData.header.timeSignatures[0]) {
+                            ts = midiData.header.timeSignatures[0].timeSignature || null;
+                        } else if (window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature) {
+                            ts = window.Tone.Transport.timeSignature;
+                        }
+                    } catch (e) { ts = null; }
+
+                    try { sm.setTimeSignatureUI(ts); } catch (e) { /* ignore */ }
+                }
+            } catch (e) {
+                console.warn('Failed to reset score UI after loading file:', e);
+            }
         } else {
             console.error("Transport module not found, cannot schedule MIDI events.");
         }
