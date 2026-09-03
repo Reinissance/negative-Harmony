@@ -26,6 +26,10 @@ class Transport {
         this.forceUpdateChannel = false;
         /** @type {Object|null} Original MIDI data before transformations */
         this.originalMidi = null;
+        /** @type {Object|null} Snapshot of note/CC/pitchBend/programChange ticks (and the
+         * previous _manualShiftApplied flag) taken right before quantizing, so
+         * toggling quantization off can restore the exact prior timing. */
+        this.quantizeSnapshot = null;
     }
 
     /**
@@ -82,19 +86,34 @@ class Transport {
                 if (midiManager) {
                     midiManager.sendEvent_allNotesOff();
                     const scoreManager = this.app.modules.scoreManager;
-                    if (scoreManager) {
-                        const updatedMidiData = this.createCurrentMidi();
-                        // Await ABC regeneration before updating the follower so it
-                        // never operates on stale ABC/bar data (avoids score crashes).
-                        const abcNotation = await scoreManager.generateABCStringfromMIDI(
-                            updatedMidiData,
-                            scoreManager.getActiveTimeSignature(),
-                            scoreManager.getActiveKeySignature()
-                        );
-                        if (abcNotation) {
-                            scoreManager.abcString = abcNotation;
+                    if (scoreManager && scoreManager.scoreShown) {
+                        // Show a loading indicator and pause score-follower polling
+                        // while the ABC is regenerated for the new direction, so the
+                        // follower never renders against mismatched/stale data.
+                        await scoreManager.showScoreLoadingIndicator('score');
+                        try {
+                            const updatedMidiData = this.createCurrentMidi();
+                            // Await ABC regeneration before updating the follower so it
+                            // never operates on stale ABC/bar data (avoids score crashes).
+                            const abcNotation = await scoreManager.generateABCStringfromMIDI(
+                                updatedMidiData,
+                                scoreManager.getActiveTimeSignature(),
+                                scoreManager.getActiveKeySignature()
+                            );
+                            if (abcNotation) {
+                                scoreManager.abcString = abcNotation;
+                                // Use a live playback-position-derived bar (which now
+                                // indexes directly into the freshly-regenerated ABC)
+                                // when playing, so the follower doesn't display a
+                                // stale window after the mode switch.
+                                const refreshBar = this.playing ? scoreManager.getCurrentPlaybackBar() : scoreManager.currentBarStart;
+                                scoreManager.updateScoreFollower('score', refreshBar, true);
+                            }
+                        } catch (e) {
+                            console.error('Failed to regenerate score after toggling reversed playback:', e);
+                        } finally {
+                            scoreManager.hideScoreLoadingIndicator();
                         }
-                        scoreManager.updateScoreFollower('score', scoreManager.currentBarStart, true);
                     }
                 }
             }, 300);
@@ -1223,15 +1242,23 @@ class Transport {
                 // Await ABC regeneration before updating the follower so it
                 // never operates on stale ABC/bar data (avoids score crashes).
                 (async () => {
-                    const abcNotation = await scoreFollower.generateABCStringfromMIDI(
-                        updatedMidi,
-                        scoreFollower.getActiveTimeSignature(),
-                        scoreFollower.getActiveKeySignature()
-                    );
-                    if (abcNotation) {
-                        scoreFollower.abcString = abcNotation;
+                    await scoreFollower.showScoreLoadingIndicator('score');
+                    try {
+                        const abcNotation = await scoreFollower.generateABCStringfromMIDI(
+                            updatedMidi,
+                            scoreFollower.getActiveTimeSignature(),
+                            scoreFollower.getActiveKeySignature()
+                        );
+                        if (abcNotation) {
+                            scoreFollower.abcString = abcNotation;
+                            const refreshBar = this.playing ? scoreFollower.getCurrentPlaybackBar() : scoreFollower.currentBarStart;
+                            scoreFollower.updateScoreFollower('score', refreshBar, true);
+                        }
+                    } catch (e) {
+                        console.error('Failed to regenerate score after channel update:', e);
+                    } finally {
+                        scoreFollower.hideScoreLoadingIndicator();
                     }
-                    scoreFollower.updateScoreFollower('score', scoreFollower.currentBarStart, true);
                 })();
             }
 
@@ -1651,7 +1678,8 @@ class Transport {
         
         // Regenerate score display from the transformed MIDI (respecting mode/negRoot/etc.)
         const scoreManager = this.app.modules.scoreManager;
-        if (scoreManager) {
+        if (scoreManager && scoreManager.scoreShown) {
+            await scoreManager.showScoreLoadingIndicator('score');
             try {
                 // Ensure parts reflect current transformation state
                 if (typeof this.updateChannels === 'function') this.updateChannels();
@@ -1665,10 +1693,13 @@ class Transport {
                 );
                 if (abcNotation) {
                     scoreManager.abcString = abcNotation;
+                    const refreshBar = this.playing ? scoreManager.getCurrentPlaybackBar() : scoreManager.currentBarStart;
+                    scoreManager.updateScoreFollower('score', refreshBar, true);
                 }
-                scoreManager.updateScoreFollower('score', scoreManager.currentBarStart, true);
             } catch (e) {
                 console.error('Failed to regenerate score after manual shift:', e);
+            } finally {
+                scoreManager.hideScoreLoadingIndicator();
             }
         }
     }
@@ -1781,7 +1812,8 @@ class Transport {
         this.scheduleMIDIEvents(midi);
 
         const scoreManager = this.app.modules.scoreManager;
-        if (scoreManager) {
+        if (scoreManager && scoreManager.scoreShown) {
+            await scoreManager.showScoreLoadingIndicator('score');
             try {
                 if (typeof this.updateChannels === 'function') this.updateChannels();
                 const transformedMidi = this.createCurrentMidi() || midi;
@@ -1792,10 +1824,223 @@ class Transport {
                 );
                 if (abcNotation) {
                     scoreManager.abcString = abcNotation;
+                    const refreshBar = this.playing ? scoreManager.getCurrentPlaybackBar() : scoreManager.currentBarStart;
+                    scoreManager.updateScoreFollower('score', refreshBar, true);
                 }
-                scoreManager.updateScoreFollower('score', scoreManager.currentBarStart, true);
             } catch (e) {
                 console.error('Failed to regenerate score after restoring manual shift:', e);
+            } finally {
+                scoreManager.hideScoreLoadingIndicator();
+            }
+        }
+    }
+
+    /**
+     * Analyzes all note start/end tick positions in a MIDI file and picks the
+     * coarsest rhythmic grid (in note-value denominator terms: 4=quarter,
+     * 8=eighth, 16=sixteenth, 32=32nd, 64=64th) that a configurable fraction of
+     * those positions already conform to (within a small timing tolerance).
+     * This lets a handful of stray 32nd/64th-note timings (typical of export
+     * noise or expressive/humanized nuance) be treated as outliers and later
+     * snapped to the predominant grid, rather than forcing the whole piece
+     * onto an unnecessarily fine subdivision just because of a few outliers.
+     * @param {Object} midi - MIDI file object to analyze
+     * @param {number} [coverage=0.92] - Fraction of note start/end positions that
+     * must fit a candidate grid (cumulatively, from quarter down to the chosen
+     * level) before that grid is selected
+     * @returns {{denominator: number, unitTicks: number}} The chosen grid
+     */
+    analyzeAndChooseQuantizeGrid(midi, coverage = 0.92) {
+        const ppq = (midi.header && midi.header.ppq) || 96;
+        const CANDIDATE_DENOMINATORS = [4, 8, 16, 32, 64];
+        const unitTicksFor = (d) => (ppq * 4) / d;
+
+        // Small fixed tolerance (in ticks) to absorb humanized/rounded timing
+        // noise when checking whether a tick position already lies "on" a
+        // candidate grid.
+        const tolerance = Math.max(1, Math.round(ppq / 32));
+
+        const counts = new Map(CANDIDATE_DENOMINATORS.map(d => [d, 0]));
+        let total = 0;
+
+        midi.tracks.forEach(track => {
+            if (!track.notes) return;
+            track.notes.forEach(note => {
+                if (typeof note.ticks !== 'number') return;
+                const boundaries = [note.ticks, note.ticks + (note.durationTicks || 0)];
+                boundaries.forEach(tick => {
+                    total++;
+                    for (const d of CANDIDATE_DENOMINATORS) {
+                        const unit = unitTicksFor(d);
+                        const remainder = tick % unit;
+                        const closeness = Math.min(remainder, unit - remainder);
+                        if (closeness <= tolerance) {
+                            counts.set(d, counts.get(d) + 1);
+                            return;
+                        }
+                    }
+                    // Doesn't align to any candidate grid within tolerance -
+                    // simply isn't counted towards any level's coverage.
+                });
+            });
+        });
+
+        if (total === 0) {
+            // No notes to analyze - default to sixteenth notes.
+            return { denominator: 16, unitTicks: unitTicksFor(16) };
+        }
+
+        let cumulative = 0;
+        for (const d of CANDIDATE_DENOMINATORS) {
+            cumulative += counts.get(d);
+            if (cumulative / total >= coverage) {
+                return { denominator: d, unitTicks: unitTicksFor(d) };
+            }
+        }
+
+        // Even the finest candidate (64th notes) doesn't reach the coverage
+        // threshold - fall back to the finest grid we support rather than
+        // going any finer (which would barely quantize anything meaningfully).
+        const finest = CANDIDATE_DENOMINATORS[CANDIDATE_DENOMINATORS.length - 1];
+        return { denominator: finest, unitTicks: unitTicksFor(finest) };
+    }
+
+    /**
+     * Snaps every note's start and end tick to the adaptively-chosen rhythmic
+     * grid (see analyzeAndChooseQuantizeGrid), mutating the MIDI in place. This
+     * cleans up imprecise note timing (e.g. notes meant to be quarters that are
+     * actually stored as double-dotted eighths plus a sixteenth rest) so both
+     * playback (including reversed playback) and the generated score reflect
+     * sensible rhythms. Control changes, pitch bends, and program changes are
+     * snapped to the same grid so they stay aligned with the notes around them.
+     * A snapshot of the previous tick/durationTicks values is kept so
+     * revertQuantizeInPlace() can restore the exact original timing.
+     * @param {Object} midi - MIDI file object to mutate
+     * @returns {{denominator: number, unitTicks: number}|null} The grid that was applied
+     */
+    quantizeMidiInPlace(midi) {
+        if (!midi || !Array.isArray(midi.tracks)) return null;
+
+        const grid = this.analyzeAndChooseQuantizeGrid(midi);
+        const unit = grid.unitTicks;
+        const snapTick = (tick) => Math.max(0, Math.round(tick / unit) * unit);
+
+        const snapshot = {
+            notes: [],
+            events: [],
+            previousManualShiftApplied: midi._manualShiftApplied
+        };
+
+        midi.tracks.forEach(track => {
+            if (track.notes && Array.isArray(track.notes)) {
+                track.notes.forEach(note => {
+                    if (typeof note.ticks !== 'number') return;
+                    snapshot.notes.push({ ref: note, ticks: note.ticks, durationTicks: note.durationTicks });
+
+                    const qStart = snapTick(note.ticks);
+                    let qEnd = snapTick(note.ticks + (note.durationTicks || 0));
+                    if (qEnd <= qStart) qEnd = qStart + unit;
+
+                    note.ticks = qStart;
+                    note.durationTicks = qEnd - qStart;
+                });
+            }
+
+            const snapEventList = (list) => {
+                if (!Array.isArray(list)) return;
+                list.forEach(evt => {
+                    if (!evt || typeof evt.ticks !== 'number') return;
+                    snapshot.events.push({ ref: evt, ticks: evt.ticks });
+                    evt.ticks = snapTick(evt.ticks);
+                });
+            };
+
+            if (track.controlChanges && typeof track.controlChanges === 'object') {
+                Object.values(track.controlChanges).forEach(snapEventList);
+            }
+            snapEventList(track.pitchBends);
+            snapEventList(track.programChanges);
+        });
+
+        // Prevent scheduleMIDIEvents() from re-running its own alignment logic
+        // on top of the freshly-quantized timing.
+        midi._manualShiftApplied = true;
+        this.quantizeSnapshot = snapshot;
+        return grid;
+    }
+
+    /**
+     * Restores the exact note/event timing captured by the most recent
+     * quantizeMidiInPlace() call, effectively undoing quantization.
+     */
+    revertQuantizeInPlace() {
+        const snapshot = this.quantizeSnapshot;
+        if (!snapshot) return;
+
+        snapshot.notes.forEach(({ ref, ticks, durationTicks }) => {
+            ref.ticks = ticks;
+            ref.durationTicks = durationTicks;
+        });
+        snapshot.events.forEach(({ ref, ticks }) => {
+            ref.ticks = ticks;
+        });
+
+        if (this.originalMidi) {
+            this.originalMidi._manualShiftApplied = snapshot.previousManualShiftApplied;
+        }
+        this.quantizeSnapshot = null;
+    }
+
+    /**
+     * Toggles adaptive rhythm quantization on/off for the currently-loaded MIDI,
+     * persists the choice, reschedules playback, and regenerates the score.
+     * @async
+     * @param {boolean} enabled - Whether quantization should be applied
+     */
+    async toggleQuantize(enabled) {
+        const state = this.app.state;
+        state.quantizeEnabled = !!enabled;
+
+        const settingsManager = this.app.modules.settingsManager;
+        if (settingsManager) {
+            settingsManager.updateUserSettings('quantizeEnabled', state.quantizeEnabled, -1);
+        }
+
+        const midi = this.originalMidi;
+        if (!midi) return;
+
+        if (state.quantizeEnabled) {
+            this.quantizeMidiInPlace(midi);
+        } else {
+            this.revertQuantizeInPlace();
+        }
+
+        // Stop any currently-sounding notes before rescheduling to avoid stuck notes.
+        const midiManager = this.app.modules.midiManager;
+        if (midiManager) midiManager.sendEvent_allNotesOff();
+
+        this.scheduleMIDIEvents(midi);
+
+        const scoreManager = this.app.modules.scoreManager;
+        if (scoreManager && scoreManager.scoreShown) {
+            await scoreManager.showScoreLoadingIndicator('score');
+            try {
+                if (typeof this.updateChannels === 'function') this.updateChannels();
+                const transformedMidi = this.createCurrentMidi() || midi;
+                const abcNotation = await scoreManager.generateABCStringfromMIDI(
+                    transformedMidi,
+                    scoreManager.getActiveTimeSignature(),
+                    scoreManager.getActiveKeySignature()
+                );
+                if (abcNotation) {
+                    scoreManager.abcString = abcNotation;
+                    const refreshBar = this.playing ? scoreManager.getCurrentPlaybackBar() : scoreManager.currentBarStart;
+                    scoreManager.updateScoreFollower('score', refreshBar, true);
+                }
+            } catch (e) {
+                console.error('Failed to regenerate score after toggling quantization:', e);
+            } finally {
+                scoreManager.hideScoreLoadingIndicator();
             }
         }
     }

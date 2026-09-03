@@ -69,6 +69,11 @@ class NegativeHarmonyApp {
             scoreShiftTicks: 0,
             /** @type {string} Rhythmic unit used for the last manual score-start shift ("64","32","16","8","4") */
             scoreShiftUnit: "4",
+            /** @type {boolean} Whether adaptive rhythm quantization is applied to note start/end times */
+            quantizeEnabled: false,
+            /** @type {number|null} Manually-set ABC unit note-length denominator (e.g. 8 or 16) from the
+             * Half Time/Double Time buttons, or null to let midi2abc auto-select it */
+            abcUnitLength: null,
         };
     }
 

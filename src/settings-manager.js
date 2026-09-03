@@ -1,7 +1,7 @@
 /**
  * Settings Manager Module
  * Handles user settings persistence, URL sharing, file settings management,
- * and dynamic loading of third-party modules like ShareThis
+ * and dynamic loading of third-party modules like 
  */
 
 /**
@@ -17,8 +17,8 @@ class SettingsManager {
         this.app = app;
         /** @type {Function} Debounced function to prevent excessive settings updates */
         this.debouncedUpdateUserSettings = Utils.debounce(this.updateUserSettings.bind(this), 300);
-        /** @type {boolean} Tracks whether ShareThis module has been loaded */
-        this.shareThisLoaded = false;
+        /** @type {boolean} Tracks whether  module has been loaded */
+        this.Loaded = false;
     }
 
     /**
@@ -386,6 +386,27 @@ class SettingsManager {
                 }
                 this.debouncedUpdateUserSettings('keySignature', ks, -1);
             }
+        }
+
+        // ABC unit note-length override (Half Time/Double Time)
+        const abcUnitLengthParam = urlParams.get('abcUnitLength');
+        if (abcUnitLengthParam !== null && abcUnitLengthParam !== undefined && abcUnitLengthParam !== '') {
+            const unitLength = parseInt(abcUnitLengthParam, 10);
+            if (!isNaN(unitLength) && unitLength > 0) {
+                state.abcUnitLength = unitLength;
+                this.debouncedUpdateUserSettings('abcUnitLength', unitLength, -1);
+            }
+        }
+
+        // Rhythm quantization - applied before the manual score-start shift below,
+        // since it reschedules playback and regenerates the score itself (matching
+        // the order a user would naturally apply these two adjustments in).
+        const quantizeParam = urlParams.get('quantizeEnabled');
+        if (quantizeParam === 'true' && transport && typeof transport.toggleQuantize === 'function') {
+            const quantizeEl = document.getElementById('quantizeMidi');
+            if (quantizeEl) quantizeEl.checked = true;
+            await transport.toggleQuantize(true);
+            this.debouncedUpdateUserSettings('quantizeEnabled', true, -1);
         }
 
         // Regenerate the score once so the restored time/key signature take effect together

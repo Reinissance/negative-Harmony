@@ -43,6 +43,11 @@ class ScoreManager {
         this.updateTimeout = null;
         /** @type {number} Total number of bars in the current score */
         this.totalBars = 0;
+        /** @type {boolean} True while the ABC/score is being regenerated (e.g. after
+         * toggling reversed playback, changing time/key signature, or shifting score
+         * start) - used to pause score-follower polling and show a loading indicator
+         * so the follower never renders against mismatched/incomplete ABC data. */
+        this.scoreRegenerating = false;
     }
 
     /**
@@ -167,13 +172,20 @@ class ScoreManager {
      * @param {Object} midiFile - MIDI file object to convert
      * @param {Array|number|string|null} timeSignature - Optional time signature to force (e.g. [4,4] or '4/4' or 4)
      * @param {number|null} keySignature - Optional key signature to force, -6 to 6 sharps (negative = flats), passed to midi2abc via -k
+     * @param {number|undefined} unitLength - Optional unit note-length denominator to force (e.g. 8 or 16),
+     * passed to midi2abc via -aul. Defaults (when omitted) to the active Half/Double Time
+     * selection from getActiveUnitLength(), or auto-selection by midi2abc when that's null.
      * @returns {Promise<string>} Generated ABC notation string
      */
-    async generateABCStringfromMIDI(midiFile, timeSignature = null, keySignature = null) {
+    async generateABCStringfromMIDI(midiFile, timeSignature = null, keySignature = null, unitLength = undefined) {
         if (!this.midi2abcReady || !this.midi2abc || !this.midi2abc.FS) {
             console.error('midi2abc WASM module not ready');
             this.handleAbcGenerationFailure('WASM module not ready');
             return '';
+        }
+
+        if (unitLength === undefined) {
+            unitLength = this.getActiveUnitLength();
         }
 
         try {
@@ -219,6 +231,12 @@ class ScoreManager {
                 if (!isNaN(ksNum)) {
                     args.push('-k', String(Math.max(-6, Math.min(6, ksNum))));
                 }
+            }
+            // Force the unit note length (in -aul, must be a power of 2) if the user
+            // clicked Half/Double Time, otherwise let midi2abc auto-select it from
+            // the time signature.
+            if (unitLength) {
+                args.push('-aul', String(unitLength));
             }
             const result = this.midi2abc.callMain(args);
 
@@ -1398,6 +1416,45 @@ class ScoreManager {
     }
 
     /**
+     * Shows a lightweight "Updating score..." placeholder in the score container and
+     * pauses score-follower polling updates (via scoreRegenerating) so the follower
+     * never renders against mismatched/incomplete ABC data while it's being
+     * regenerated - e.g. after toggling reversed playback, changing the time/key
+     * signature, or shifting the score start.
+     * @async
+     * @param {string} containerId - Container element ID (default: 'score')
+     * @returns {Promise<void>} Resolves after yielding a couple of frames so the
+     * browser has a chance to actually paint the indicator before any subsequent
+     * synchronous/blocking WASM work runs on the main thread.
+     */
+    async showScoreLoadingIndicator(containerId = 'score') {
+        this.scoreRegenerating = true;
+        const scoreElement = document.getElementById(containerId);
+        if (scoreElement) {
+            scoreElement.innerHTML = '<p style="padding: 20px; text-align: center;">🔄 Updating score…</p>';
+        }
+        // Yield to the browser (double rAF) so the placeholder is actually painted
+        // before we proceed with the (potentially blocking) ABC regeneration.
+        await new Promise((resolve) => {
+            if (typeof window !== 'undefined' && window.requestAnimationFrame) {
+                window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+            } else {
+                setTimeout(resolve, 0);
+            }
+        });
+    }
+
+    /**
+     * Clears the "Updating score..." placeholder state and resumes score-follower
+     * polling updates. Does not touch the DOM directly - the caller is expected to
+     * immediately re-render (e.g. via updateScoreFollower/renderScoreFollower),
+     * which will replace the placeholder content.
+     */
+    hideScoreLoadingIndicator() {
+        this.scoreRegenerating = false;
+    }
+
+    /**
      * Renders score follower showing a specific 4-bar window
      * @param {string} containerId - Container element ID (default: 'score')
      * @param {number} startBar - Starting bar number (0-based, default: 0)
@@ -1440,35 +1497,41 @@ class ScoreManager {
         const scoreElement = document.getElementById(containerId);
         if (!scoreElement) return;
 
-        // Show temporary message while reloading
-        scoreElement.innerHTML = '<p>Reloading score...</p>';
+        // Show a loading indicator and pause score-follower polling while the ABC
+        // is regenerated, so a concurrently-running poll tick can't race against
+        // this reload and render mismatched/incomplete data.
+        await this.showScoreLoadingIndicator(containerId);
 
-        // Regenerate ABC from current MIDI
-        const transport = this.app.modules.transport;
-        let abcNotation = '';
-        if (transport && transport.createCurrentMidi) {
-            const currentMidi = transport.createCurrentMidi();
-            if (currentMidi) {
-                // prefer UI selects, then Tone.Transport, then MIDI header
-                const ts = this.getActiveTimeSignature();
-                const ks = this.getActiveKeySignature();
-                abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts, ks);
+        try {
+            // Regenerate ABC from current MIDI
+            const transport = this.app.modules.transport;
+            let abcNotation = '';
+            if (transport && transport.createCurrentMidi) {
+                const currentMidi = transport.createCurrentMidi();
+                if (currentMidi) {
+                    // prefer UI selects, then Tone.Transport, then MIDI header
+                    const ts = this.getActiveTimeSignature();
+                    const ks = this.getActiveKeySignature();
+                    abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts, ks);
+                }
             }
-        }
 
-        if (!abcNotation) {
-            scoreElement.innerHTML = '<p>Failed to reload score data</p>';
-            return;
-        }
+            if (!abcNotation) {
+                scoreElement.innerHTML = '<p>Failed to reload score data</p>';
+                return;
+            }
 
-        // Update the stored abcString with the regenerated notation
-        this.abcString = abcNotation;
+            // Update the stored abcString with the regenerated notation
+            this.abcString = abcNotation;
 
-        // If score follower is active, update follower window; otherwise, full render
-        if (this.scoreFollowerActive) {
-            this.renderScoreFollower(containerId, this.currentBarStart);
-        } else {
-            this.renderScore(containerId);
+            // If score follower is active, update follower window; otherwise, full render
+            if (this.scoreFollowerActive) {
+                this.renderScoreFollower(containerId, this.currentBarStart);
+            } else {
+                this.renderScore(containerId);
+            }
+        } finally {
+            this.hideScoreLoadingIndicator();
         }
     }
 
@@ -1774,6 +1837,80 @@ class ScoreManager {
     }
 
     /**
+     * Returns the currently active ABC unit note-length override (a denominator
+     * such as 8 for eighth notes or 16 for sixteenth notes), set via the Half
+     * Time/Double Time buttons, or null to let midi2abc auto-select it from the
+     * time signature (its default behaviour).
+     * @returns {number|null}
+     */
+    getActiveUnitLength() {
+        const val = this.app.state.abcUnitLength;
+        return (typeof val === 'number' && val > 0) ? val : null;
+    }
+
+    /**
+     * Computes the unit note-length denominator midi2abc would auto-select for
+     * a given time signature, replicating its own default-selection rule
+     * (meters with a "compound" feel default to eighth notes, others to
+     * sixteenths) so Half Time/Double Time have a sensible starting point
+     * before the user has ever overridden the unit length.
+     * @param {Array} timeSignature - [numerator, denominator]
+     * @returns {number}
+     */
+    getDefaultUnitLengthForTimeSignature(timeSignature) {
+        const [num, den] = (Array.isArray(timeSignature) && timeSignature.length >= 2) ? timeSignature : [4, 4];
+        return ((num * 4) / (den || 4) >= 3) ? 8 : 16;
+    }
+
+    /**
+     * Halves the printed rhythmic resolution (e.g. sixteenth notes become
+     * eighth notes) - useful when midi2abc's automatically-chosen note values
+     * look busier/smaller than the music actually calls for. Persists the
+     * choice and regenerates the score.
+     */
+    async halveNoteLength() {
+        try {
+            const state = this.app.state;
+            const current = this.getActiveUnitLength() || this.getDefaultUnitLengthForTimeSignature(this.getActiveTimeSignature());
+            const next = Math.max(4, current / 2);
+            state.abcUnitLength = next;
+
+            const settingsManager = this.app.modules.settingsManager;
+            if (settingsManager) {
+                settingsManager.updateUserSettings('abcUnitLength', next, -1);
+            }
+
+            await this.reloadScore('score');
+        } catch (err) {
+            console.error('Error halving note length:', err);
+        }
+    }
+
+    /**
+     * Doubles the printed rhythmic resolution (e.g. eighth notes become
+     * sixteenth notes) - useful when midi2abc's automatically-chosen note
+     * values look coarser/larger than the music actually calls for. Persists
+     * the choice and regenerates the score.
+     */
+    async doubleNoteLength() {
+        try {
+            const state = this.app.state;
+            const current = this.getActiveUnitLength() || this.getDefaultUnitLengthForTimeSignature(this.getActiveTimeSignature());
+            const next = Math.min(64, current * 2);
+            state.abcUnitLength = next;
+
+            const settingsManager = this.app.modules.settingsManager;
+            if (settingsManager) {
+                settingsManager.updateUserSettings('abcUnitLength', next, -1);
+            }
+
+            await this.reloadScore('score');
+        } catch (err) {
+            console.error('Error doubling note length:', err);
+        }
+    }
+
+    /**
      * Read UI selects and apply the selected time signature to Tone and ABC generation,
      * then regenerate and reload the displayed score.
      */
@@ -1849,6 +1986,26 @@ class ScoreManager {
     }
 
     /**
+     * Clamps a bar index into the valid [0, totalBars-1] range of the currently
+     * displayed ABC notation. Both forward and reversed playback already schedule
+     * audio and regenerate the displayed ABC from the same tick timeline (reversed
+     * playback re-maps note ticks via Transport.createCurrentMidi() before the ABC
+     * is (re)generated), so Tone.Transport's raw forward bar count already indexes
+     * directly into whichever ABC is currently shown - no extra "flip" is needed.
+     * This clamp only guards against boundary mismatches between the audio's real
+     * duration and midi2abc's own bar-splitting so the follower never crashes.
+     * @param {number} bar - 0-based bar index
+     * @returns {number} 0-based bar index, clamped to a valid range
+     */
+    clampBarIndex(bar) {
+        const totalBars = (typeof this.totalBars === 'number' && this.totalBars > 0) ? this.totalBars : 0;
+        if (totalBars <= 0) {
+            return Math.max(0, bar);
+        }
+        return Math.max(0, Math.min(totalBars - 1, bar));
+    }
+
+    /**
      * Gets the current playback bar position from transport timing
      * @returns {number} Current bar number (0-based)
      */
@@ -1862,7 +2019,6 @@ class ScoreManager {
             if (window.Tone && window.Tone.Transport) {
                 // Use Tone.js position directly for more accurate timing
                 const position = window.Tone.Transport.position;
-                const state = this.app.state;
                 
                 // Parse the position string (format: "bars:beats:sixteenths")
                 const positionParts = position.split(':').map(p => parseInt(p, 10) || 0);
@@ -1888,25 +2044,9 @@ class ScoreManager {
                 if (this._tonePositionOneBased) barFloat = Math.max(0, barFloat - 1);
                 let currentBar = Math.max(0, Math.floor(barFloat));
                 
-                // Account for reversed playback
-                if (state.reversedPlayback) {
-                    const originalMidi = transport.originalMidi;
-                    if (originalMidi && originalMidi.header) {
-                        const ppq = originalMidi.header.ppq || 96;
-                        const timeSignature = originalMidi.header.timeSignatures?.[0]?.timeSignature || [4, 4];
-                        const [numerator, denominator] = timeSignature;
-                        
-                        // Calculate ticks per beat and per measure correctly for arbitrary time signatures
-                        const ticksPerBeat = ppq * (4 / denominator);
-                        const ticksPerMeasure = ticksPerBeat * numerator;
-                        const totalTicks = originalMidi.durationTicks || 0;
-                        const totalBars = Math.ceil(totalTicks / Math.max(1, ticksPerMeasure));
-                        
-                        currentBar = Math.max(0, totalBars - currentBar - 1);
-                    }
-                }
-                
-                return Math.max(0, currentBar);
+                // Tone.Transport's bar count already indexes directly into whichever
+                // ABC is currently displayed (forward or reversed) - see clampBarIndex().
+                return this.clampBarIndex(currentBar);
             }
         } catch (error) {
             console.warn('Could not get current playback bar:', error);
@@ -1931,17 +2071,13 @@ class ScoreManager {
             display.textContent = `Bar: ${barNumber + 1} (Window: ${this.currentBarStart + 1}-${this.currentBarStart + 4})`;
         }
         
-        // Calculate which 4-bar window this bar belongs to
+        // Calculate which 4-bar window this bar belongs to. barNumber already indexes
+        // directly into whichever ABC is currently displayed (forward or reversed -
+        // see clampBarIndex()/getCurrentPlaybackBar()), so no reversal is applied here.
         let targetWindow = Math.floor(barNumber / 4) * 4;
 
         // Update if we've moved to a different 4-bar window or immediately requested
         if (targetWindow !== this.currentBarStart || immediately) {
-            if (this.app.state.reversedPlayback) {
-                targetWindow = Math.abs(this.totalBars - targetWindow);
-                if (targetWindow === this.currentBarStart) {
-                    return; // No change
-                }
-            }
             this.currentBarStart = targetWindow;
             // console.log(`Score follower updating to bars ${this.currentBarStart}-${this.currentBarStart + 3} (current bar: ${barNumber})`);
             
@@ -2003,6 +2139,14 @@ class ScoreManager {
                 this.stopPollingForPlayback();
                 return;
             }
+
+            // Skip updates while the ABC/score is being regenerated (e.g. after
+            // toggling reversed playback) so we never render against stale or
+            // mismatched bar/ABC data. The code that triggers regeneration is
+            // responsible for calling updateScoreFollower() itself once ready.
+            if (this.scoreRegenerating) {
+                return;
+            }
             
             // Compute fractional bar from Tone position (reuse detection logic)
             let effectiveBar = this.getCurrentPlaybackBar();
@@ -2026,7 +2170,9 @@ class ScoreManager {
                     let currentIntBar = Math.floor(barFloat);
                     if (progress >= ADVANCE_THRESHOLD) currentIntBar = currentIntBar + 1;
 
-                    effectiveBar = Math.max(0, currentIntBar);
+                    // Tone.Transport's bar count already indexes directly into whichever
+                    // ABC is currently displayed (forward or reversed) - see clampBarIndex().
+                    effectiveBar = this.clampBarIndex(Math.max(0, currentIntBar));
                 }
             } catch (err) {
                 // silent fallback - use getCurrentPlaybackBar result

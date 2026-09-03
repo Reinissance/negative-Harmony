@@ -280,6 +280,12 @@ class MidiManager {
                     try { sm.setKeySignatureUI(null); } catch (e) { /* ignore */ }
                 }
 
+                // Reset quantize toggle - any snapshot from the previous file is no
+                // longer valid (it references note objects belonging to that midi).
+                transport.quantizeSnapshot = null;
+                const quantizeEl = document.getElementById('quantizeMidi');
+                if (quantizeEl) quantizeEl.checked = false;
+
                 // Clear persisted score settings from app state so a stale time/key
                 // signature or manual shift from a previously-loaded piece doesn't
                 // leak into the share URL for this new file. (URL-driven restoration,
@@ -290,6 +296,8 @@ class MidiManager {
                 state.keySignature = null;
                 state.scoreShiftTicks = 0;
                 state.scoreShiftUnit = '4';
+                state.quantizeEnabled = false;
+                state.abcUnitLength = null;
             } catch (e) {
                 console.warn('Failed to reset score UI after loading file:', e);
             }

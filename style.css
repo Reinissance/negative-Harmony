@@ -122,6 +122,16 @@ span {
   color: white;
 }
 
+/* Chrome/Chromium render <option> popups using the OS-native white/light
+   background regardless of the (semi-transparent) .form-select background,
+   which made the inherited white option text invisible until hovered.
+   Firefox already renders option text with sufficient contrast, so this
+   explicit rule only needs to correct Chrome/Chromium/Edge/Safari. */
+.form-select option {
+  color: #000;
+  background-color: #fff;
+}
+
 input[type="range"]::-webkit-slider-thumb {
   background: orange;
 }
@@ -164,8 +174,10 @@ input[type="range"]::-ms-thumb {
 
   body {
       margin:0;
-      /* hide the original background shorthand on small screens so only ::before is used */
+      /* hide the original background shorthand on small screens so only ::before is used,
+         but keep the black background-color so no white shows through */
       background: none !important;
+      background-color: black !important;
       background-attachment: scroll;
       /* keep no transforms on body itself */
       transform: none !important;

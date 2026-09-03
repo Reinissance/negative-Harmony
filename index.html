@@ -80,6 +80,14 @@
       <div style="display: flex; justify-content: center;">
         <div id="score" style="overflow-x: auto; max-width: 500px; position: relative; z-index: 1; background-color: rgba(255, 228, 196, 0.766);"></div>
       </div>
+
+      <!-- Toggle for the (collapsed-by-default) score adjustment controls -->
+      <div style="display:flex; justify-content:center; margin-top:10px;">
+        <button class="btn btn-outline-light btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#scoreFooterCollapse" aria-expanded="false" aria-controls="scoreFooterCollapse">
+          ⚙ Score Settings ▾
+        </button>
+      </div>
+      <div class="collapse" id="scoreFooterCollapse">
       <div id="score-footer" class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between;">
         <!-- Shift controls box (styled like footer) -->
         <div class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display:flex; align-items:center; gap:8px;">
@@ -138,6 +146,29 @@
             <option value="6">F# / D#m (6 sharps)</option>
           </select>
         </div>
+
+        <!-- Note length box (styled like footer) -->
+        <div class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display:flex; align-items:center; gap:8px;">
+          <span style="color: #fff; margin-left:6px;">Note Length:</span>
+          <button class="btn btn-outline-light btn-sm" id="halfTimeBtn" title="Makes note values larger (e.g. sixteenths drawn as eighths) - use when midi2abc's automatic note lengths look busier/smaller than they should."
+            onclick="app.modules.scoreManager.halveNoteLength()">
+            Half Time
+          </button>
+          <button class="btn btn-outline-light btn-sm" id="doubleTimeBtn" title="Makes note values smaller (e.g. eighths drawn as sixteenths) - use when midi2abc's automatic note lengths look coarser/larger than they should."
+            onclick="app.modules.scoreManager.doubleNoteLength()">
+            Double Time
+          </button>
+        </div>
+
+        <!-- Quantize rhythm box (styled like footer) -->
+        <div class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display:flex; align-items:center; gap:8px;">
+          <div class="form-check form-switch" style="margin:0;">
+            <input class="form-check-input" type="checkbox" role="switch" id="quantizeMidi"
+              onchange="app && app.modules && app.modules.transport && app.modules.transport.toggleQuantize(this.checked)">
+            <label class="form-check-label" for="quantizeMidi" style="color: #fff;" title="Snaps note start/end times to the smallest rhythmic grid the piece predominantly uses, ignoring rare outlier note values. Helps reverse playback avoid strange rhythms caused by imprecise note timing.">Quantize rhythm</label>
+          </div>
+        </div>
+      </div>
       </div>
 
     </div>
