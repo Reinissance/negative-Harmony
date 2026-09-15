@@ -48,6 +48,8 @@ class ScoreManager {
          * start) - used to pause score-follower polling and show a loading indicator
          * so the follower never renders against mismatched/incomplete ABC data. */
         this.scoreRegenerating = false;
+        /** @type {boolean} Whether the score is currently displayed in fullscreen mode */
+        this.isFullscreen = false;
     }
 
     /**
@@ -55,8 +57,32 @@ class ScoreManager {
      * @async
      */
     async init() {
+        this.setupFullscreenListeners();
         // Load required modules first
         await this.loadModules();
+    }
+
+    /**
+     * Sets up event listeners for fullscreen mode changes and escape key
+     */
+    setupFullscreenListeners() {
+        if (typeof window !== 'undefined' && window.addEventListener) {
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && this.isFullscreen) {
+                    this.exitFullscreen();
+                }
+            });
+        }
+        if (typeof document !== 'undefined' && document.addEventListener) {
+            const handleFsChange = () => {
+                const isNativeFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+                if (!isNativeFs && this.isFullscreen) {
+                    this.exitFullscreen(false);
+                }
+            };
+            document.addEventListener('fullscreenchange', handleFsChange);
+            document.addEventListener('webkitfullscreenchange', handleFsChange);
+        }
     }
 
     /**
@@ -2213,9 +2239,215 @@ class ScoreManager {
     }
 
     /**
+     * Moves an element into a target slot while leaving a placeholder to restore it later.
+     * @param {HTMLElement} element - Element to move
+     * @param {HTMLElement} targetSlot - Slot element to append to
+     * @param {string} placeholderKey - Unique key for placeholder
+     */
+    moveElementWithPlaceholder(element, targetSlot, placeholderKey = null) {
+        if (!element || !targetSlot || !element.parentNode) return;
+        const key = placeholderKey || element.id || (element.getAttribute && element.getAttribute('for')) || 'elem';
+        const placeholderId = `${key}-fs-placeholder`;
+        let placeholder = document.getElementById(placeholderId);
+        if (!placeholder) {
+            placeholder = document.createElement('span');
+            placeholder.id = placeholderId;
+            placeholder.style.display = 'none';
+            element.parentNode.insertBefore(placeholder, element);
+        }
+        targetSlot.appendChild(element);
+    }
+
+    /**
+     * Restores an element to its original position using its placeholder.
+     * @param {HTMLElement} element - Element to restore
+     * @param {string} placeholderKey - Unique key for placeholder
+     */
+    restoreElementFromPlaceholder(element, placeholderKey = null) {
+        if (!element) return;
+        const key = placeholderKey || element.id || (element.getAttribute && element.getAttribute('for')) || 'elem';
+        const placeholderId = `${key}-fs-placeholder`;
+        const placeholder = document.getElementById(placeholderId);
+        if (placeholder && placeholder.parentNode) {
+            placeholder.parentNode.insertBefore(element, placeholder);
+            placeholder.remove();
+        }
+    }
+
+    /**
+     * Moves playback controls to the fullscreen overlay bar
+     */
+    moveControlsToFullscreen() {
+        const playBtn = document.getElementById('playMidi');
+        const playSlot = document.getElementById('fsPlaySlot');
+        if (playBtn && playSlot) {
+            this.moveElementWithPlaceholder(playBtn, playSlot, 'playMidi');
+        }
+
+        const revInput = document.getElementById('reverseMidi');
+        const revLabel = document.querySelector('label[for="reverseMidi"]');
+        const revSlot = document.getElementById('fsReverseSlot');
+        if (revInput && revSlot) {
+            this.moveElementWithPlaceholder(revInput, revSlot, 'reverseMidi');
+        }
+        if (revLabel && revSlot) {
+            this.moveElementWithPlaceholder(revLabel, revSlot, 'reverseMidiLabel');
+        }
+
+        const speedLabel = document.querySelector('label[for="speedControl"]');
+        const speedInput = document.getElementById('speedControl');
+        const speedSlot = document.getElementById('fsSpeedSlot');
+        if (speedLabel && speedSlot) {
+            this.moveElementWithPlaceholder(speedLabel, speedSlot, 'speedControlLabel');
+        }
+        if (speedInput && speedSlot) {
+            this.moveElementWithPlaceholder(speedInput, speedSlot, 'speedControl');
+        }
+
+        const progressInput = document.getElementById('progress-input');
+        const progressSlot = document.getElementById('fsProgressSlot');
+        if (progressInput && progressSlot) {
+            this.moveElementWithPlaceholder(progressInput, progressSlot, 'progress-input');
+            progressInput.style.display = 'block';
+        }
+    }
+
+    /**
+     * Restores playback controls from fullscreen overlay back to their original places
+     */
+    restoreControlsFromFullscreen() {
+        const playBtn = document.getElementById('playMidi');
+        if (playBtn) this.restoreElementFromPlaceholder(playBtn, 'playMidi');
+
+        const revInput = document.getElementById('reverseMidi');
+        if (revInput) this.restoreElementFromPlaceholder(revInput, 'reverseMidi');
+
+        const revLabel = document.querySelector('label[for="reverseMidi"]');
+        if (revLabel) this.restoreElementFromPlaceholder(revLabel, 'reverseMidiLabel');
+
+        const speedLabel = document.querySelector('label[for="speedControl"]');
+        if (speedLabel) this.restoreElementFromPlaceholder(speedLabel, 'speedControlLabel');
+
+        const speedInput = document.getElementById('speedControl');
+        if (speedInput) this.restoreElementFromPlaceholder(speedInput, 'speedControl');
+
+        const progressInput = document.getElementById('progress-input');
+        if (progressInput) {
+            this.restoreElementFromPlaceholder(progressInput, 'progress-input');
+            const isPlaying = this.app.modules.transport && this.app.modules.transport.playing;
+            progressInput.style.display = isPlaying ? 'block' : 'none';
+        }
+    }
+
+    /**
+     * Toggles between fullscreen and normal score mode
+     */
+    toggleFullscreen() {
+        if (this.isFullscreen) {
+            this.exitFullscreen();
+        } else {
+            this.enterFullscreen();
+        }
+    }
+
+    /**
+     * Enters fullscreen score mode
+     */
+    enterFullscreen() {
+        if (this.isFullscreen) return;
+        if (!this.scoreShown) {
+            this.showScore();
+        }
+        this.isFullscreen = true;
+
+        const scoreContainer = document.getElementById('scoreContainer');
+        const overlay = document.getElementById('scoreFullscreenOverlay');
+        const fsBtn = document.getElementById('fullscreenScoreBtn');
+        if (fsBtn) {
+            fsBtn.textContent = '⛶ Exit Fullscreen';
+            fsBtn.classList.remove('btn-outline-info');
+            fsBtn.classList.add('btn-outline-warning');
+        }
+
+        this.moveControlsToFullscreen();
+
+        if (scoreContainer) {
+            scoreContainer.classList.add('score-fullscreen');
+        }
+        if (typeof document !== 'undefined' && document.body) {
+            document.body.classList.add('score-fullscreen-active');
+        }
+        if (overlay) {
+            overlay.style.display = 'flex';
+        }
+
+        if (scoreContainer && scoreContainer.requestFullscreen) {
+            scoreContainer.requestFullscreen().catch(() => {});
+        } else if (typeof document !== 'undefined' && document.documentElement && document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(() => {});
+        }
+
+        // Re-render score to adapt to fullscreen dimensions
+        if (this.scoreFollowerActive) {
+            this.renderScoreFollower('score', this.currentBarStart);
+        } else {
+            this.renderScore('score');
+        }
+    }
+
+    /**
+     * Exits fullscreen score mode and restores all elements
+     * @param {boolean} requestExitNative - Whether to call document.exitFullscreen
+     */
+    exitFullscreen(requestExitNative = true) {
+        if (!this.isFullscreen) return;
+        this.isFullscreen = false;
+
+        const scoreContainer = document.getElementById('scoreContainer');
+        const overlay = document.getElementById('scoreFullscreenOverlay');
+        const fsBtn = document.getElementById('fullscreenScoreBtn');
+        if (fsBtn) {
+            fsBtn.textContent = '⛶ Fullscreen';
+            fsBtn.classList.remove('btn-outline-warning');
+            fsBtn.classList.add('btn-outline-info');
+        }
+
+        if (requestExitNative && typeof document !== 'undefined') {
+            if (document.fullscreenElement) {
+                document.exitFullscreen().catch(() => {});
+            } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
+                document.webkitExitFullscreen().catch(() => {});
+            }
+        }
+
+        this.restoreControlsFromFullscreen();
+
+        if (scoreContainer) {
+            scoreContainer.classList.remove('score-fullscreen');
+        }
+        if (typeof document !== 'undefined' && document.body) {
+            document.body.classList.remove('score-fullscreen-active');
+        }
+        if (overlay) {
+            overlay.style.display = 'none';
+        }
+
+        // Re-render score to adapt back to standard view
+        if (this.scoreFollowerActive) {
+            this.renderScoreFollower('score', this.currentBarStart);
+        } else {
+            this.renderScore('score');
+        }
+    }
+
+    /**
      * Hides the score display and cleans up score following resources
      */
     hideScore() {
+        if (this.isFullscreen) {
+            this.exitFullscreen();
+        }
+
         // console.log('Hiding score and cleaning up score follower');
         this.stopScoreFollowing();
         this.scoreShown = false;

@@ -70,10 +70,21 @@
   </div>
   <div style="display: flex; justify-content: center;">
     <div id="scoreContainer" class="boxed" style=" border: 1px solid white; display: none; margin-top: 20px; padding: 20px; background-color: rgba(0, 0, 0, 0.184); border-radius: 5px; max-width: 870px;">
+      <!-- Fullscreen overlay floating controls -->
+      <div id="scoreFullscreenOverlay" class="score-fullscreen-overlay" style="display: none;">
+        <div class="score-fullscreen-row">
+          <div id="fsPlaySlot" class="score-fullscreen-slot"></div>
+          <div id="fsReverseSlot" class="score-fullscreen-slot"></div>
+          <div id="fsSpeedSlot" class="score-fullscreen-slot score-fullscreen-speed"></div>
+          <button class="btn btn-outline-warning btn-sm score-fullscreen-exit-btn" id="exitFullscreenBtn" onclick="app.modules.scoreManager.exitFullscreen();" title="Leave fullscreen mode">⛶ Exit Fullscreen</button>
+        </div>
+        <div id="fsProgressSlot" class="score-fullscreen-progress-slot"></div>
+      </div>
       <div class="score-header horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; position: relative;">
         <h4 style="margin: 0;">Music Score</h4>
         <div style="display:flex; gap:8px;align-items:center;">
           <button class="btn btn-outline-success" id="downloadAbc" onclick="app.modules.scoreManager.downloadABC();">Download ABC</button>
+          <button class="btn btn-outline-info" id="fullscreenScoreBtn" onclick="app.modules.scoreManager.toggleFullscreen();" title="Toggle Fullscreen Score">⛶ Fullscreen</button>
           <button class="btn btn-outline-light" onclick="app.modules.scoreManager.hideScore();">Close</button>
         </div>
       </div>

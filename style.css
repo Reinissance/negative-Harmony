@@ -217,3 +217,182 @@ input[type="range"]::-ms-thumb {
       width: 90%;
   }
 }
+
+/* ==========================================================================
+   Fullscreen Score Mode Styles
+   ========================================================================== */
+
+body.score-fullscreen-active {
+  overflow: hidden !important;
+}
+
+#scoreContainer.score-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 85px 20px 20px 20px !important;
+  background-color: rgba(10, 10, 10, 0.96) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  z-index: 99999 !important;
+  box-shadow: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-sizing: border-box !important;
+}
+
+#scoreContainer.score-fullscreen .score-header {
+  display: none !important;
+}
+
+#scoreContainer.score-fullscreen #score {
+  max-width: 1100px !important;
+  width: 100% !important;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  padding: 15px;
+  margin: 0 auto;
+  background-color: rgba(255, 248, 235, 0.95) !important;
+}
+
+/* Floating Overlay Toolbar in Fullscreen Mode */
+.score-fullscreen-overlay {
+  display: none !important;
+}
+
+#scoreContainer.score-fullscreen .score-fullscreen-overlay {
+  position: fixed !important;
+  top: 12px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  z-index: 100000 !important;
+  background: rgba(20, 20, 20, 0.65) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: 10px !important;
+  padding: 6px 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 4px !important;
+  max-width: 95vw !important;
+  width: max-content !important;
+  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.6) !important;
+  opacity: 0.8 !important;
+  transition: opacity 0.2s ease, background-color 0.2s ease !important;
+}
+
+#scoreContainer.score-fullscreen .score-fullscreen-overlay:hover {
+  opacity: 1 !important;
+  background: rgba(15, 15, 15, 0.92) !important;
+}
+
+.score-fullscreen-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.score-fullscreen-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.score-fullscreen-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: #fff;
+  white-space: nowrap;
+}
+
+#scoreContainer.score-fullscreen #playMidi {
+  margin: 0 !important;
+  min-height: unset !important;
+  height: 30px !important;
+  padding: 2px 12px !important;
+  font-size: 0.82rem !important;
+  flex-grow: 0 !important;
+  position: static !important;
+  width: auto !important;
+  box-shadow: none !important;
+  color: #fff !important;
+  background-color: rgba(220, 53, 69, 0.75) !important;
+  border-radius: 4px !important;
+}
+
+#scoreContainer.score-fullscreen label[for="reverseMidi"] {
+  padding: 2px 10px !important;
+  font-size: 0.8rem !important;
+  height: 30px !important;
+  display: flex !important;
+  align-items: center !important;
+  margin: 0 !important;
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  border-radius: 4px !important;
+}
+
+#scoreContainer.score-fullscreen label[for="speedControl"] {
+  font-size: 0.8rem !important;
+  margin: 0 !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  text-shadow: none !important;
+}
+
+#scoreContainer.score-fullscreen #speedControl {
+  width: 80px !important;
+  height: 12px !important;
+  margin: 0 !important;
+  display: inline-block !important;
+  vertical-align: middle !important;
+}
+
+.score-fullscreen-progress-slot {
+  width: 100%;
+}
+
+#scoreContainer.score-fullscreen #progress-input {
+  display: block !important;
+  width: 100% !important;
+  margin: 2px 0 0 0 !important;
+  height: 8px !important;
+  cursor: pointer !important;
+}
+
+.score-fullscreen-exit-btn {
+  height: 30px !important;
+  padding: 2px 10px !important;
+  font-size: 0.8rem !important;
+  display: flex !important;
+  align-items: center !important;
+  border-radius: 4px !important;
+}
+
+@media (max-width: 600px) {
+  .score-fullscreen-overlay {
+    padding: 6px 8px !important;
+    top: 6px !important;
+  }
+  .score-fullscreen-row {
+    gap: 6px !important;
+  }
+  #scoreContainer.score-fullscreen {
+    padding: 110px 8px 10px 8px !important;
+  }
+}
