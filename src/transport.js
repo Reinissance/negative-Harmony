@@ -817,6 +817,16 @@ class Transport {
         } else {
             this.originalMidi = this.alignMidiToFirstMusicalBar(midi);
         }
+
+        // Always schedule the canonical object.  Apart from making the data flow
+        // explicit, this matters when a timing transform (such as quantization)
+        // changes the last note: reverse scheduling below and createCurrentMidi()
+        // must use the same duration as the notes being scheduled.  The duration
+        // initially stored by MidiManager predates alignment/quantization.
+        midi = this.originalMidi;
+        if (midi && typeof midi.duration === 'number' && isFinite(midi.duration)) {
+            this.app.track_duration = midi.duration;
+        }
         
         // Store alignment info for score following
         this.firstMusicalBar = { ticks: 0, time: 0, method: 'aligned' };
@@ -1837,30 +1847,38 @@ class Transport {
 
     /**
      * Analyzes all note start/end tick positions in a MIDI file and picks the
-     * coarsest rhythmic grid (in note-value denominator terms: 4=quarter,
-     * 8=eighth, 16=sixteenth, 32=32nd, 64=64th) that a configurable fraction of
-     * those positions already conform to (within a small timing tolerance).
+     * coarsest straight or triplet rhythmic grid that a configurable fraction
+     * of those positions already conform to (within a small timing tolerance).
      * This lets a handful of stray 32nd/64th-note timings (typical of export
      * noise or expressive/humanized nuance) be treated as outliers and later
      * snapped to the predominant grid, rather than forcing the whole piece
      * onto an unnecessarily fine subdivision just because of a few outliers.
      * @param {Object} midi - MIDI file object to analyze
      * @param {number} [coverage=0.92] - Fraction of note start/end positions that
-     * must fit a candidate grid (cumulatively, from quarter down to the chosen
-     * level) before that grid is selected
-     * @returns {{denominator: number, unitTicks: number}} The chosen grid
+     * must independently fit a candidate grid before that grid is selected
+     * @returns {{denominator: number, unitTicks: number, triplet: boolean}} The chosen grid
      */
     analyzeAndChooseQuantizeGrid(midi, coverage = 0.92) {
         const ppq = (midi.header && midi.header.ppq) || 96;
-        const CANDIDATE_DENOMINATORS = [4, 8, 16, 32, 64];
-        const unitTicksFor = (d) => (ppq * 4) / d;
+        const straightUnit = (denominator) => (ppq * 4) / denominator;
+        const candidate = (denominator, triplet = false) => ({
+            denominator,
+            triplet,
+            // A triplet note occupies 2/3 of its straight note value.
+            unitTicks: straightUnit(denominator) * (triplet ? 2 / 3 : 1)
+        });
+        // Ordered from coarse to fine. At each comparable rhythmic level the
+        // straight grid comes first, so shared boundaries do not make straight
+        // material look like triplets.
+        const candidates = [
+            candidate(4), candidate(4, true),
+            candidate(8), candidate(8, true),
+            candidate(16), candidate(16, true),
+            candidate(32), candidate(32, true),
+            candidate(64), candidate(64, true)
+        ];
 
-        // Small fixed tolerance (in ticks) to absorb humanized/rounded timing
-        // noise when checking whether a tick position already lies "on" a
-        // candidate grid.
-        const tolerance = Math.max(1, Math.round(ppq / 32));
-
-        const counts = new Map(CANDIDATE_DENOMINATORS.map(d => [d, 0]));
+        const counts = new Map(candidates.map(grid => [grid, 0]));
         let total = 0;
 
         midi.tracks.forEach(track => {
@@ -1870,39 +1888,42 @@ class Transport {
                 const boundaries = [note.ticks, note.ticks + (note.durationTicks || 0)];
                 boundaries.forEach(tick => {
                     total++;
-                    for (const d of CANDIDATE_DENOMINATORS) {
-                        const unit = unitTicksFor(d);
+                    for (const grid of candidates) {
+                        const unit = grid.unitTicks;
+                        // A fixed ppq-based tolerance made humanized quarter/eighth
+                        // notes miss every coarse candidate, causing a fallback to
+                        // the 64th-note grid and an almost inaudible one- or two-tick
+                        // change.  Compare against a fraction of each candidate grid
+                        // instead. Genuine finer subdivisions remain well outside
+                        // this window, while normal performance jitter is absorbed.
+                        const tolerance = Math.max(1, unit / 8);
                         const remainder = tick % unit;
                         const closeness = Math.min(remainder, unit - remainder);
                         if (closeness <= tolerance) {
-                            counts.set(d, counts.get(d) + 1);
-                            return;
+                            counts.set(grid, counts.get(grid) + 1);
                         }
                     }
-                    // Doesn't align to any candidate grid within tolerance -
-                    // simply isn't counted towards any level's coverage.
                 });
             });
         });
 
         if (total === 0) {
             // No notes to analyze - default to sixteenth notes.
-            return { denominator: 16, unitTicks: unitTicksFor(16) };
+            return candidate(16);
         }
 
-        let cumulative = 0;
-        for (const d of CANDIDATE_DENOMINATORS) {
-            cumulative += counts.get(d);
-            if (cumulative / total >= coverage) {
-                return { denominator: d, unitTicks: unitTicksFor(d) };
+        for (const grid of candidates) {
+            // Straight and triplet grids are not nested lattices. Test every
+            // candidate against the complete boundary set instead of combining
+            // matches from incompatible coarser grids.
+            if (counts.get(grid) / total >= coverage) {
+                return grid;
             }
         }
 
-        // Even the finest candidate (64th notes) doesn't reach the coverage
-        // threshold - fall back to the finest grid we support rather than
-        // going any finer (which would barely quantize anything meaningfully).
-        const finest = CANDIDATE_DENOMINATORS[CANDIDATE_DENOMINATORS.length - 1];
-        return { denominator: finest, unitTicks: unitTicksFor(finest) };
+        // Unstructured timing should retain the previous straight-64th fallback;
+        // an actual 64th-triplet pattern reaches its candidate above.
+        return candidate(64);
     }
 
     /**
@@ -1916,19 +1937,24 @@ class Transport {
      * A snapshot of the previous tick/durationTicks values is kept so
      * revertQuantizeInPlace() can restore the exact original timing.
      * @param {Object} midi - MIDI file object to mutate
-     * @returns {{denominator: number, unitTicks: number}|null} The grid that was applied
+     * @returns {{denominator: number, unitTicks: number, triplet: boolean}|null} The grid that was applied
      */
     quantizeMidiInPlace(midi) {
         if (!midi || !Array.isArray(midi.tracks)) return null;
+        // Do not replace the pre-quantize snapshot if restoration code or a
+        // duplicate UI event asks to enable an already-enabled transform.
+        if (this.quantizeSnapshot) return this.quantizeSnapshot.grid;
 
         const grid = this.analyzeAndChooseQuantizeGrid(midi);
         const unit = grid.unitTicks;
-        const snapTick = (tick) => Math.max(0, Math.round(tick / unit) * unit);
+        // MIDI ticks are integers even when PPQ is not divisible by three.
+        const snapTick = (tick) => Math.max(0, Math.round(Math.round(tick / unit) * unit));
 
         const snapshot = {
             notes: [],
             events: [],
-            previousManualShiftApplied: midi._manualShiftApplied
+            previousManualShiftApplied: midi._manualShiftApplied,
+            grid
         };
 
         midi.tracks.forEach(track => {

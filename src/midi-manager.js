@@ -162,6 +162,13 @@ class MidiManager {
                 reader.onload = (e) => {
                     // Mark as local file for UI behavior
                     this.app.localFile = true;
+                    this.app.state.midiFile = "";
+                    this.app.state.midiFileUrl = "";
+                    const midiUrlInput = document.getElementById("midiUrl");
+                    if (midiUrlInput) {
+                        midiUrlInput.value = "";
+                    }
+                    this.app.modules.settingsManager?.setShareAvailable(false);
 
                     // Parse the MIDI file using midi.js library
                     this.parseMidiFile(new Midi(e.target.result));
@@ -234,7 +241,8 @@ class MidiManager {
         // Reveal the score button now that a MIDI file has been loaded
         const showScoreBtn = document.getElementById("showScore");
         if (showScoreBtn) {
-            showScoreBtn.style.display = "flex";
+            const scoreManager = this.app.modules.scoreManager;
+            showScoreBtn.style.display = scoreManager?.scoreAvailable ? "flex" : "none";
         }
 
         // Update MIDI file name display in UI
@@ -280,11 +288,11 @@ class MidiManager {
                     try { sm.setKeySignatureUI(null); } catch (e) { /* ignore */ }
                 }
 
-                // Reset quantize toggle - any snapshot from the previous file is no
-                // longer valid (it references note objects belonging to that midi).
+                // Reset score quantization for a newly loaded file.
                 transport.quantizeSnapshot = null;
                 const quantizeEl = document.getElementById('quantizeMidi');
-                if (quantizeEl) quantizeEl.checked = false;
+                if (quantizeEl) quantizeEl.value = 'off';
+                this.app.state.abcShortRest = null;
 
                 // Clear persisted score settings from app state so a stale time/key
                 // signature or manual shift from a previously-loaded piece doesn't

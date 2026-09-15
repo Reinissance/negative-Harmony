@@ -130,7 +130,7 @@
         <div class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display:flex; align-items:center; gap:8px;">
           <span style="color: #fff; margin-left:6px;">Key Signature:</span>
           <select id="keySignature" class="form-select" style="width:160px; margin-left:6px;" onchange="app && app.modules && app.modules.scoreManager && app.modules.scoreManager.onKeySignatureSelectChange()">
-            <option value="auto" selected>Auto (from MIDI)</option>
+            <option value="auto" selected>Auto (detect key)</option>
             <option value="-6">Gb / Ebm (6 flats)</option>
             <option value="-5">Db / Bbm (5 flats)</option>
             <option value="-4">Ab / Fm (4 flats)</option>
@@ -160,13 +160,17 @@
           </button>
         </div>
 
-        <!-- Quantize rhythm box (styled like footer) -->
+        <!-- Short-rest quantization (midi2abc -sr) -->
         <div class="horizontal" style="background:rgba(0, 0, 0, 0.2); padding: 10px; display:flex; align-items:center; gap:8px;">
-          <div class="form-check form-switch" style="margin:0;">
-            <input class="form-check-input" type="checkbox" role="switch" id="quantizeMidi"
-              onchange="app && app.modules && app.modules.transport && app.modules.transport.toggleQuantize(this.checked)">
-            <label class="form-check-label" for="quantizeMidi" style="color: #fff;" title="Snaps note start/end times to the smallest rhythmic grid the piece predominantly uses, ignoring rare outlier note values. Helps reverse playback avoid strange rhythms caused by imprecise note timing.">Quantize rhythm</label>
-          </div>
+          <label for="quantizeMidi" style="color: #fff; margin-left:6px;">Quantize rhythm:</label>
+          <select class="form-select form-select-sm" id="quantizeMidi" style="width:auto;"
+            title="Passes the selected short-rest value to midi2abc."
+            onchange="app && app.modules && app.modules.scoreManager && app.modules.scoreManager.setShortRestQuantization(this.value)">
+            <option value="off" selected>Off</option>
+            <option value="4">Quarters</option>
+            <option value="8">Eighths</option>
+            <option value="16">Sixteenths</option>
+          </select>
         </div>
       </div>
       </div>

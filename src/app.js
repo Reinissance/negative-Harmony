@@ -74,6 +74,7 @@ class NegativeHarmonyApp {
             /** @type {number|null} Manually-set ABC unit note-length denominator (e.g. 8 or 16) from the
              * Half Time/Double Time buttons, or null to let midi2abc auto-select it */
             abcUnitLength: null,
+            abcShortRest: null,
         };
     }
 
@@ -551,7 +552,6 @@ class NegativeHarmonyApp {
                     this.modules.transport.cleanup();
                     // Parse new MIDI file
                     this.modules.midiManager.parseMidiFile(new Midi(data));
-                    this.modules.settingsManager.share();
                     this.state.midiFile = midiFileUrl;
                     document.getElementById("midiUrl").value = midiFileUrl;
                     Utils.setPlayButtonActive(true);

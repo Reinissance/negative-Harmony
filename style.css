@@ -8,6 +8,24 @@
     animation: none !important;
 }
 
+/* Keep ShareThis actions visible at the bottom of the viewport instead of
+   leaving them at the end of the document. ShareThis injects #st-1 and its
+   own positioning styles, so these viewport rules must take precedence. */
+.sharethis-sticky-share-buttons,
+#st-1,
+.st-popup {
+    position: fixed !important;
+    top: auto !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    z-index: 10001 !important;
+    text-align: center !important;
+    transform: none !important;
+}
+
 /* Disable all ShareThis animations */
 [class*="st-"] {
     transition: none !important;

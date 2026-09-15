@@ -135,35 +135,18 @@ class ScoreManager {
      * Initializes the midi2abc WASM module for MIDI to ABC conversion
      * @returns {Promise<void>} Resolves when WASM module is ready
      */
-    initializeMidi2abc() {
-        return new Promise((resolve, reject) => {
-            if (!window.midi2abcModule) {
-                reject(new Error('midi2abcModule not found'));
-                return;
-            }
-
-            // Initialize output variable at class level
-            this.abcOutput = "";
-
-            // Instantiate midi2abc WASM module with output handlers
-            window.midi2abcModule({
-                print: (text) => {
-                    this.abcOutput += text + "\n";
-                },
-                printErr: (text) => {
-                    console.error('WASM error:', text);
-                },
-                onRuntimeInitialized: () => {
-                    this.midi2abcReady = true;
-                    resolve();
-                }
-            }).then((Module) => {
-                this.midi2abc = Module;
-            }).catch((error) => {
-                console.error('Failed to initialize WASM module:', error);
-                reject(error);
-            });
-        });
+    async initializeMidi2abc() {
+        if (!window.midi2abcModule) {
+            throw new Error('midi2abcModule not found');
+        }
+        // Download once; each conversion needs fresh C globals, not another call
+        // to main() on an instance that retains the previous file's meter/state.
+        const response = await fetch('./src/midi2abc/midi2abc.wasm');
+        if (!response.ok) {
+            throw new Error(`Failed to load midi2abc WASM: HTTP ${response.status}`);
+        }
+        this.midi2abcBinary = new Uint8Array(await response.arrayBuffer());
+        this.midi2abcReady = true;
     }
 
     /**
@@ -172,13 +155,13 @@ class ScoreManager {
      * @param {Object} midiFile - MIDI file object to convert
      * @param {Array|number|string|null} timeSignature - Optional time signature to force (e.g. [4,4] or '4/4' or 4)
      * @param {number|null} keySignature - Optional key signature to force, -6 to 6 sharps (negative = flats), passed to midi2abc via -k
-     * @param {number|undefined} unitLength - Optional unit note-length denominator to force (e.g. 8 or 16),
-     * passed to midi2abc via -aul. Defaults (when omitted) to the active Half/Double Time
-     * selection from getActiveUnitLength(), or auto-selection by midi2abc when that's null.
+     * @param {number|undefined} unitLength - Optional ABC L: denominator to preserve
+     * across regenerations. This changes only the generated ABC header.
      * @returns {Promise<string>} Generated ABC notation string
      */
     async generateABCStringfromMIDI(midiFile, timeSignature = null, keySignature = null, unitLength = undefined) {
-        if (!this.midi2abcReady || !this.midi2abc || !this.midi2abc.FS) {
+        if (!this.scoreAvailable) return '';
+        if (!this.midi2abcReady || !this.midi2abcBinary) {
             console.error('midi2abc WASM module not ready');
             this.handleAbcGenerationFailure('WASM module not ready');
             return '';
@@ -189,6 +172,16 @@ class ScoreManager {
         }
 
         try {
+            const request = this.conversionRequest = (this.conversionRequest || 0) + 1;
+            let output = '';
+            const converter = await window.midi2abcModule({
+                noInitialRun: true,
+                wasmBinary: this.midi2abcBinary,
+                print: text => { output += text + '\n'; },
+                printErr: text => console.error('WASM error:', text)
+            });
+            if (request !== this.conversionRequest || !this.scoreAvailable) return '';
+            this.midi2abc = converter;
             this.abcString = "";
             // Convert the Midi object to array buffer
             const midiArrayBuffer = midiFile.toArray();
@@ -212,7 +205,11 @@ class ScoreManager {
             
             // Call midi2abc conversion with optimized flags for score display
             // Build callMain args and include optional time signature (-m) if provided
-            const args = ['input.mid', '-sr', '4', '-bpl', '4', '-ga'];
+            const args = ['input.mid', '-bpl', '4', '-ga'];
+            const shortRest = this.app.state.abcShortRest;
+            if ([4, 8, 16].includes(shortRest)) {
+                args.push('-sr', String(shortRest));
+            }
             if (timeSignature) {
                 let tsString = '';
                 if (Array.isArray(timeSignature) && timeSignature.length >= 2) {
@@ -225,23 +222,23 @@ class ScoreManager {
                 args.push('-m', tsString);
             }
             // Force the key signature (in sharps, -6..6) if the user selected one explicitly,
-            // otherwise let midi2abc derive it from the MIDI file's own key signature meta events.
+            // otherwise detect the key from the transformed notes, not stale
+            // key metadata copied from the source MIDI.
             if (keySignature !== null && keySignature !== undefined && keySignature !== '') {
                 const ksNum = parseInt(keySignature, 10);
                 if (!isNaN(ksNum)) {
                     args.push('-k', String(Math.max(-6, Math.min(6, ksNum))));
                 }
+            } else {
+                args.push('-gk');
             }
-            // Force the unit note length (in -aul, must be a power of 2) if the user
-            // clicked Half/Double Time, otherwise let midi2abc auto-select it from
-            // the time signature.
-            if (unitLength) {
-                args.push('-aul', String(unitLength));
+            const result = converter.callMain(args);
+            if (result !== 0) {
+                throw new Error(`midi2abc exited with status ${result}`);
             }
-            const result = this.midi2abc.callMain(args);
 
             // Get the output (this should be captured by the print function)
-            let abcOutput = this.abcOutput;
+            let abcOutput = output;
             
             if (!abcOutput || abcOutput.trim().length === 0) {
                 console.warn('No ABC output generated');
@@ -251,6 +248,12 @@ class ScoreManager {
             
             // Clean up the output - remove everything before the first X: header
             abcOutput = abcOutput.replace(/^[\s\S]*?(?=^X:)/m, '');
+            if (unitLength && /^L:\s*1\s*\/\s*\d+\s*$/m.test(abcOutput)) {
+                abcOutput = abcOutput.replace(
+                    /^L:\s*1\s*\/\s*\d+\s*$/m,
+                    `L:1/${unitLength}`
+                );
+            }
 
             // New: inject track names from the provided midiFile into V: headers as nm and snm
             try {
@@ -296,6 +299,7 @@ class ScoreManager {
 
             // Store the result and calculate total bars
             this.abcString = abcOutput;
+            this.syncScoreSettingsFromABC(abcOutput);
             this.totalBars = this.getTotalBarsFromABC();
             return abcOutput;
             
@@ -416,6 +420,12 @@ class ScoreManager {
     }
 
     showAbcErrorNotification(errorMessage) {
+        // The user has already chosen to continue without score. Do not interrupt
+        // playback again if a pending or later follower render reports another error.
+        if (!this.scoreAvailable) {
+            return;
+        }
+
         // Hide score container if it's showing
         const scoreContainer = document.getElementById('scoreContainer');
         if (scoreContainer) {
@@ -595,6 +605,14 @@ class ScoreManager {
      * Dismisses the error notification and disables score functionality
      */
     dismissAbcErrorNotification() {
+        // Stop the four-bar follower before disabling score so no scheduled polling
+        // or pending render can retrigger score generation errors.
+        this.stopScoreFollowing();
+        if (this.updateTimeout) {
+            clearTimeout(this.updateTimeout);
+            this.updateTimeout = null;
+        }
+
         // Hide show score button since score won't be available
         const showScoreBtn = document.getElementById("showScore");
         if (showScoreBtn) {
@@ -939,16 +957,9 @@ class ScoreManager {
                 displayPercussion: true
              };
              
-             // Ensure displayed ABC reflects active Tone time signature if present
-             let abcToRender = this.abcString;
-             try {
-                 const ts = window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature;
-                 if (ts) {
-                     abcToRender = this.injectTimeSignatureIntoABC(abcToRender, ts);
-                 }
-             } catch (e) { /* ignore */ }
-
-             this.abcjs.renderAbc(containerId, abcToRender, renderOptions, visualOptions);
+             // Tone represents 6/8 as three quarter-note beats, not as notation.
+             // Render the converter's meter without rewriting it from playback.
+             this.abcjs.renderAbc(containerId, this.abcString, renderOptions, visualOptions);
              
              // Scale the rendered content to fit height constraint
              setTimeout(() => {
@@ -1460,6 +1471,10 @@ class ScoreManager {
      * @param {number} startBar - Starting bar number (0-based, default: 0)
      */
     renderScoreFollower(containerId = 'score', startBar = 0) {
+        if (!this.scoreAvailable) {
+            return;
+        }
+
         // console.log(`Rendering score follower: bars ${startBar}-${startBar + 3}`);
         
         const followingABC = this.generateScoreFollower(startBar);
@@ -1471,13 +1486,7 @@ class ScoreManager {
 
         // Temporarily store original ABC and use following ABC
         const originalABC = this.abcString;
-        // Inject current Tone time signature into the follower ABC so the displayed bars match playback
-        let followerWithTS = followingABC;
-        try {
-            const ts = window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature;
-            if (ts) followerWithTS = this.injectTimeSignatureIntoABC(followingABC, ts);
-        } catch (e) { /* ignore */ }
-        this.abcString = followerWithTS;
+        this.abcString = followingABC;
         
         // Render the score follower
         this.renderScore(containerId);
@@ -1701,10 +1710,6 @@ class ScoreManager {
                      return;
                  }
                  
-                 // Ensure UI selects reflect the used time signature
-                 try {
-                     this.setTimeSignatureUI(ts);
-                 } catch (e) { /* ignore */ }
              } catch (error) {
                  console.error('Error regenerating score:', error);
                  this.handleAbcGenerationFailure(`Score regeneration failed: ${error.message}`);
@@ -1777,63 +1782,21 @@ class ScoreManager {
     }
 
     /**
-     * Read active time signature from UI selects, Tone.Transport, or MIDI header.
-     * Returns [numerator, denominator]
+     * Read the explicit meter override, or null for midi2abc's automatic meter.
      */
     getActiveTimeSignature() {
-        // prefer user UI selects if present
-        try {
-            const numEl = document.getElementById('timeSigNum');
-            const denEl = document.getElementById('timeSigDen');
-            if (numEl && denEl && numEl.value) {
-                const num = parseInt(numEl.value, 10) || 4;
-                const den = parseInt(denEl.value, 10) || 4;
-                return [Math.max(1, Math.min(16, num)), den];
-            }
-        } catch (e) { console.error('Error reading time signature from UI selects:', e); }
-
-        // fallback to Tone.Transport if available
-        try {
-            if (window.Tone && window.Tone.Transport && window.Tone.Transport.timeSignature) {
-                const ts = window.Tone.Transport.timeSignature;
-                if (Array.isArray(ts) && ts.length >= 2) return [ts[0], ts[1]];
-                if (typeof ts === 'number') return [ts, 4];
-            }
-        } catch (e) { console.error('Error reading time signature from Tone.Transport:', e); }
-
-        // fallback to MIDI header in current MIDI
-        try {
-            const transport = this.app.modules.transport;
-            if (transport && transport.createCurrentMidi) {
-                const midi = transport.createCurrentMidi();
-                if (midi && midi.header && midi.header.timeSignatures && midi.header.timeSignatures[0]) {
-                    const tsObj = midi.header.timeSignatures[0].timeSignature || midi.header.timeSignatures[0];
-                    if (Array.isArray(tsObj) && tsObj.length >= 2) return [tsObj[0], tsObj[1]];
-                    if (typeof tsObj === 'number') return [tsObj, 4];
-                }
-            }
-        } catch (e) { /* ignore */ }
-
-        return [4, 4];
+        // Displaying a detected meter in the controls is not a manual override.
+        // With no override, let midi2abc read the MIDI's meter events.
+        return this.app.state.timeSignature || null;
     }
 
     /**
-     * Read the active key signature from the UI select.
+     * Read the explicit key signature override (not the detected UI value).
      * Returns an integer from -6 to 6 (sharps positive, flats negative) or null
-     * if left on "Auto" (midi2abc should guess/derive it from the MIDI file).
+     * if automatic detection should be used.
      */
     getActiveKeySignature() {
-        try {
-            const keyEl = document.getElementById('keySignature');
-            if (keyEl && keyEl.value !== '' && keyEl.value !== 'auto') {
-                const key = parseInt(keyEl.value, 10);
-                if (!isNaN(key)) {
-                    return Math.max(-6, Math.min(6, key));
-                }
-            }
-        } catch (e) { console.error('Error reading key signature from UI select:', e); }
-
-        return null;
+        return this.app.state.keySignature ?? null;
     }
 
     /**
@@ -1862,25 +1825,33 @@ class ScoreManager {
         return ((num * 4) / (den || 4) >= 3) ? 8 : 16;
     }
 
-    /**
-     * Halves the printed rhythmic resolution (e.g. sixteenth notes become
-     * eighth notes) - useful when midi2abc's automatically-chosen note values
-     * look busier/smaller than the music actually calls for. Persists the
-     * choice and regenerates the score.
-     */
+    async setShortRestQuantization(value) {
+        const parsed = parseInt(value, 10);
+        const next = [4, 8, 16].includes(parsed) ? parsed : null;
+        this.app.state.abcShortRest = next;
+        this.app.modules.settingsManager?.updateUserSettings('abcShortRest', next, -1);
+        if (this.scoreShown) await this.reloadScore('score');
+    }
+
+    updateABCUnitLength(multiplier) {
+        const match = this.abcString.match(/^L:\s*1\s*\/\s*(\d+)\s*$/m);
+        if (!match) return false;
+        const current = Number(match[1]);
+        const next = Math.max(1, Math.min(1024, current * multiplier));
+        this.abcString = this.abcString.replace(/^L:\s*1\s*\/\s*\d+\s*$/m, `L:1/${next}`);
+        this.app.state.abcUnitLength = next;
+        this.app.modules.settingsManager?.updateUserSettings('abcUnitLength', next, -1);
+        if (this.scoreFollowerActive) {
+            this.renderScoreFollower('score', this.currentBarStart);
+        } else {
+            this.renderScore('score');
+        }
+        return true;
+    }
+
     async halveNoteLength() {
         try {
-            const state = this.app.state;
-            const current = this.getActiveUnitLength() || this.getDefaultUnitLengthForTimeSignature(this.getActiveTimeSignature());
-            const next = Math.max(4, current / 2);
-            state.abcUnitLength = next;
-
-            const settingsManager = this.app.modules.settingsManager;
-            if (settingsManager) {
-                settingsManager.updateUserSettings('abcUnitLength', next, -1);
-            }
-
-            await this.reloadScore('score');
+            this.updateABCUnitLength(0.5);
         } catch (err) {
             console.error('Error halving note length:', err);
         }
@@ -1894,17 +1865,7 @@ class ScoreManager {
      */
     async doubleNoteLength() {
         try {
-            const state = this.app.state;
-            const current = this.getActiveUnitLength() || this.getDefaultUnitLengthForTimeSignature(this.getActiveTimeSignature());
-            const next = Math.min(64, current * 2);
-            state.abcUnitLength = next;
-
-            const settingsManager = this.app.modules.settingsManager;
-            if (settingsManager) {
-                settingsManager.updateUserSettings('abcUnitLength', next, -1);
-            }
-
-            await this.reloadScore('score');
+            this.updateABCUnitLength(2);
         } catch (err) {
             console.error('Error doubling note length:', err);
         }
@@ -1916,7 +1877,9 @@ class ScoreManager {
      */
     async onTimeSignatureSelectChange() {
         try {
-            const [num, den] = this.getActiveTimeSignature();
+            const num = parseInt(document.getElementById('timeSigNum').value, 10);
+            const den = parseInt(document.getElementById('timeSigDen').value, 10);
+            this.app.state.timeSignature = [num, den];
 
             // Persist the user's choice so it is included in the shareable URL
             const settingsManager = this.app.modules.settingsManager;
@@ -1931,27 +1894,14 @@ class ScoreManager {
                         window.Tone.Transport.timeSignature = [num, den];
                     } catch (e) {
                         // some Tone builds expect a number -> set beats per bar
-                        window.Tone.Transport.timeSignature = num;
+                        window.Tone.Transport.timeSignature = num * 4 / den;
                     }
                 }
             } catch (e) {
                 console.warn('Failed to apply time signature to Tone.Transport:', e);
             }
 
-            // Regenerate ABC using the new time signature (pass to midi2abc with -m)
-            const ks = this.getActiveKeySignature();
-            const transport = this.app.modules.transport;
-            if (transport && typeof transport.createCurrentMidi === 'function') {
-                const currentMidi = transport.createCurrentMidi();
-                if (currentMidi) {
-                    const abcNotation = await this.generateABCStringfromMIDI(currentMidi, [num, den], ks);
-                    if (abcNotation) {
-                        this.abcString = abcNotation;
-                        // Reload to ensure injection & rendering are consistent
-                        await this.reloadScore('score');
-                    }
-                }
-            }
+            await this.reloadScore('score');
         } catch (err) {
             console.error('Error handling time signature change:', err);
         }
@@ -1963,6 +1913,8 @@ class ScoreManager {
      */
     async onKeySignatureSelectChange() {
         try {
+            const value = document.getElementById('keySignature').value;
+            this.app.state.keySignature = value === 'auto' ? null : parseInt(value, 10);
             // Persist the user's choice so it is included in the shareable URL
             const settingsManager = this.app.modules.settingsManager;
             if (settingsManager) {
@@ -2098,6 +2050,10 @@ class ScoreManager {
      * @param {number} startBar - Starting bar number (default: 0)
      */
     startScoreFollowing(containerId = 'score', startBar = 0) {
+        if (!this.scoreAvailable) {
+            return;
+        }
+
         // console.log(`Starting score following at bar ${startBar}...`);
         this.scoreFollowerActive = true;
         
@@ -2268,7 +2224,8 @@ class ScoreManager {
         const scoreContainer = document.getElementById('scoreContainer');
         if (scoreContainer) {
             scoreContainer.style.display = 'none';
-            document.getElementById("showScore").style.display = 'block';
+            document.getElementById("showScore").style.display =
+                this.scoreAvailable ? 'block' : 'none';
         }
     }
 
@@ -2276,6 +2233,14 @@ class ScoreManager {
      * Shows the score with automatic score following enabled
      */
     showScore() {
+        if (!this.scoreAvailable) {
+            const showScoreButton = document.getElementById("showScore");
+            if (showScoreButton) {
+                showScoreButton.style.display = 'none';
+            }
+            return;
+        }
+
         this.scoreShown = true;
         const scoreContainer = document.getElementById('scoreContainer');
         if (scoreContainer) {
@@ -2393,11 +2358,45 @@ class ScoreManager {
             }
         }
 
-        // clamp numerator between 1..16
-        num = Math.max(1, Math.min(16, num));
-        // set UI values if present in options
+        // Preserve uncommon meters detected by midi2abc instead of leaving a
+        // select empty when its initial options do not include the result.
+        for (const [element, value] of [[numEl, num], [denEl, den]]) {
+            if (!Array.from(element.options).some(option => option.value === String(value))) {
+                const option = document.createElement('option');
+                option.value = String(value);
+                option.textContent = String(value);
+                element.appendChild(option);
+            }
+        }
         numEl.value = String(num);
         denEl.value = String(den);
+    }
+
+    /**
+     * Reflect the converter's actual settings without turning detection into an
+     * override. Only user changes (or shared URL settings) write those overrides.
+     */
+    syncScoreSettingsFromABC(abc) {
+        const meter = abc.match(/^M:\s*(\d+)\s*\/\s*(\d+)/m);
+        if (meter) {
+            const ts = [Number(meter[1]), Number(meter[2])];
+            this.setTimeSignatureUI(ts);
+            if (window.Tone?.Transport) {
+                window.Tone.Transport.timeSignature = ts;
+            }
+        }
+
+        const key = abc.match(/^K:\s*([A-G])([#b]?)([a-z]*)/m);
+        if (key) {
+            const major = { C: 0, D: 2, E: 4, F: -1, G: 1, A: 3, B: 5 };
+            const mode = key[3].toLowerCase();
+            const offset = (mode === 'm' || mode.startsWith('min') || mode.startsWith('aeo')) ? -3
+                : mode.startsWith('dor') ? -2 : mode.startsWith('phr') ? -4
+                : mode.startsWith('lyd') ? 1 : mode.startsWith('mix') ? -1
+                : mode.startsWith('loc') ? -5 : 0;
+            const sharps = major[key[1]] + (key[2] === '#' ? 7 : key[2] === 'b' ? -7 : 0) + offset;
+            this.setKeySignatureUI(sharps);
+        }
     }
 
     /**

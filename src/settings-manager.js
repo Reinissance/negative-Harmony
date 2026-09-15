@@ -26,7 +26,66 @@ class SettingsManager {
      * @async
      */
     async init() {
-        // Currently no initialization required
+        this.setShareAvailable(false);
+
+        // ShareThis may recalculate its position when Bootstrap accordions change
+        // the document height. Re-apply viewport positioning after those changes.
+        document.addEventListener("shown.bs.collapse", () => this.pinShareThisToViewport());
+        document.addEventListener("hidden.bs.collapse", () => this.pinShareThisToViewport());
+        window.addEventListener("resize", () => this.pinShareThisToViewport());
+    }
+
+    /**
+     * Shows sharing controls only when the current MIDI has a public URL.
+     * @param {boolean} available - Whether the current MIDI can be shared
+     */
+    setShareAvailable(available) {
+        const display = available ? "block" : "none";
+        const shareButton = document.getElementById("hiddenShareButton");
+        if (shareButton) {
+            shareButton.style.display = display;
+        }
+
+        const shareThisButtons = document.getElementById("st-1");
+        if (shareThisButtons) {
+            shareThisButtons.style.display = display;
+        }
+
+        if (available) {
+            // The toolbar is injected asynchronously and may be replaced by
+            // ShareThis, so pin it immediately and after its common load delays.
+            this.pinShareThisToViewport();
+            setTimeout(() => this.pinShareThisToViewport(), 250);
+            setTimeout(() => this.pinShareThisToViewport(), 1000);
+        }
+    }
+
+    /**
+     * Keeps ShareThis UI attached to the mobile viewport, independent of page height.
+     */
+    pinShareThisToViewport() {
+        const elements = [
+            document.getElementById("st-1"),
+            ...document.querySelectorAll(".st-popup")
+        ].filter(Boolean);
+
+        elements.forEach((element) => {
+            // A transformed or scrolling ancestor can make position: fixed behave
+            // like absolute positioning, so keep injected UI directly under body.
+            if (element.parentElement !== document.body) {
+                document.body.appendChild(element);
+            }
+
+            element.style.setProperty("position", "fixed", "important");
+            element.style.setProperty("top", "auto", "important");
+            element.style.setProperty("right", "0", "important");
+            element.style.setProperty("bottom", "0", "important");
+            element.style.setProperty("left", "0", "important");
+            element.style.setProperty("width", "100%", "important");
+            element.style.setProperty("margin", "0", "important");
+            element.style.setProperty("z-index", "10001", "important");
+            element.style.setProperty("transform", "none", "important");
+        });
     }
 
     /**
@@ -221,7 +280,6 @@ class SettingsManager {
         if (midiFileUrl && (midiFileUrl.endsWith(".mid") || midiFileUrl.endsWith(".midi"))) {
             state.midiFile = midiFileUrl;
             await this.loadMidiFileFromUrl(midiFileUrl, urlParams);
-            document.getElementById("hiddenShareButton").style.display = "block";
             this.debouncedUpdateUserSettings("midiFile", midiFileUrl, -1);
             const transport = this.app.modules.transport;
             if (transport.forceUpdateChannel) {
@@ -258,6 +316,12 @@ class SettingsManager {
      */
     share() {
         return new Promise(async (resolve) => {
+            if (this.app.localFile || !this.app.state.midiFile) {
+                this.setShareAvailable(false);
+                resolve(null);
+                return;
+            }
+
             // Load ShareThis module dynamically when sharing is actually needed
             await this.loadModule();
 
@@ -278,12 +342,7 @@ class SettingsManager {
             
             Utils.updateShareUrl(shareUrl);
 
-            // Show ShareThis buttons if available
-            const shares = document.getElementById("st-1")
-            if (shares) {
-                shares.style.display = "block";
-            }
-            document.getElementById("hiddenShareButton").style.display = "block";
+            this.setShareAvailable(true);
 
             resolve(shareUrl);
         });
@@ -295,6 +354,9 @@ class SettingsManager {
      */
     async shareAndCopy() {
         const shareUrl = await this.share();
+        if (!shareUrl) {
+            return;
+        }
         navigator.clipboard.writeText(shareUrl).then(() => {
             alert("Note: Please only share examples that are your own work or come from the public domain. Do NOT share copyrighted music without permission. \n\nThe share URL is copied to clipboard.");
         }).catch(err => {
@@ -331,7 +393,7 @@ class SettingsManager {
 
             // Update UI elements
             document.getElementById("midiUrl").value = midiFileUrl;
-            const shareUrl = this.share();
+            await this.share();
 
             Utils.setPlayButtonActive(true);
         } catch (error) {
@@ -398,18 +460,17 @@ class SettingsManager {
             }
         }
 
-        // Rhythm quantization - applied before the manual score-start shift below,
-        // since it reschedules playback and regenerates the score itself (matching
-        // the order a user would naturally apply these two adjustments in).
-        const quantizeParam = urlParams.get('quantizeEnabled');
-        if (quantizeParam === 'true' && transport && typeof transport.toggleQuantize === 'function') {
+        // midi2abc short-rest quantization.
+        const shortRestParam = parseInt(urlParams.get('abcShortRest'), 10);
+        if ([4, 8, 16].includes(shortRestParam)) {
             const quantizeEl = document.getElementById('quantizeMidi');
-            if (quantizeEl) quantizeEl.checked = true;
-            await transport.toggleQuantize(true);
-            this.debouncedUpdateUserSettings('quantizeEnabled', true, -1);
+            if (quantizeEl) quantizeEl.value = String(shortRestParam);
+            state.abcShortRest = shortRestParam;
+            this.debouncedUpdateUserSettings('abcShortRest', shortRestParam, -1);
         }
 
-        // Regenerate the score once so the restored time/key signature take effect together
+        // Regenerate the score once so restored time, key, and L: settings take
+        // effect together.
         if (scoreManager && transport && typeof transport.createCurrentMidi === 'function') {
             try {
                 const currentMidi = transport.createCurrentMidi();
@@ -421,7 +482,11 @@ class SettingsManager {
                     );
                     if (abcNotation) {
                         scoreManager.abcString = abcNotation;
-                        await scoreManager.reloadScore('score');
+                        if (scoreManager.scoreFollowerActive) {
+                            scoreManager.renderScoreFollower('score', scoreManager.currentBarStart);
+                        } else {
+                            scoreManager.renderScore('score');
+                        }
                     }
                 }
             } catch (e) {
