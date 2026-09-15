@@ -131,21 +131,51 @@ class Transport {
         if (!progressSlider) return;
 
         progressSlider.oninput = (event) => {
-            const state = this.app.state;
-            const position = (event.target.value / 100) * (this.app.track_duration / state.speed);
-            // Handle reversed playback positioning
-            Tone.Transport.seconds = state.reversedPlayback ? 
-                (this.app.track_duration / state.speed) - position : position;
-
-            // Stop all notes after seeking to prevent hanging notes
-            setTimeout(() => {
-                const midiManager = this.app.modules.midiManager;
-                if (midiManager) {
-                    midiManager.sendEvent_allNotesOff();
-                }
-            }, 300);
+            const wallDuration = this.app.track_duration / this.app.state.speed;
+            this.seekToPiecePosition((event.target.value / 100) * wallDuration);
         };
     }
+
+    /**
+     * Seeks playback to a position expressed as wall-clock seconds through the
+     * piece's content (0 = start of the piece, trackDuration/speed = end),
+     * regardless of the reversed-playback flag - i.e. the same space the
+     * progress slider's 0-100% range represents. Used both by that slider and
+     * by other UI (e.g. manually scrolling the score) that seeks playback.
+     * @param {number} piecePosition - Seconds from the start of the piece's content
+     */
+    seekToPiecePosition(piecePosition, { syncScore = true } = {}) {
+        const state = this.app.state;
+        const wallDuration = this.app.track_duration / state.speed;
+        const clamped = Math.max(0, Math.min(wallDuration, piecePosition));
+
+        // Handle reversed playback positioning
+        Tone.Transport.seconds = state.reversedPlayback ? (wallDuration - clamped) : clamped;
+
+        if (this.progressSlider) {
+            this.progressSlider.value = wallDuration ? (clamped / wallDuration) * 100 : 0;
+        }
+
+        // While stopped, the score doesn't get the usual polling updates during
+        // playback - sync it directly here so seeking (e.g. dragging the slider,
+        // or scrolling the score) still moves the score's highlighted/scrolled position.
+        // syncScore is false when the score itself initiated the seek, to avoid a feedback loop.
+        if (!this.playing && syncScore) {
+            const scoreManager = this.app.modules.scoreManager;
+            if (scoreManager && scoreManager.scoreShown) {
+                scoreManager.syncTimingToPlayback();
+            }
+        }
+
+        // Stop all notes after seeking to prevent hanging notes
+        setTimeout(() => {
+            const midiManager = this.app.modules.midiManager;
+            if (midiManager) {
+                midiManager.sendEvent_allNotesOff();
+            }
+        }, 300);
+    }
+
 
     /**
      * Toggles between play and stop states
@@ -171,18 +201,33 @@ class Transport {
     startPlayback(playBtn) {
         playBtn.innerText = "Stop Playback";
         this.playing = true;
-        Tone.Transport.position = 0;
-        
-        // Notify score manager BEFORE starting transport for proper synchronization
+
+        // In fullscreen, playback resumes from the current position (unless it sits at the end).
         const scoreManager = this.app.modules.scoreManager;
+        const keepPosition = !!(scoreManager && scoreManager.isFullscreen);
+        const wallDuration = this.app.track_duration / this.app.state.speed;
+        if (!keepPosition || Tone.Transport.seconds >= wallDuration - 0.05) {
+            Tone.Transport.position = 0;
+        }
+        const resumeTicks = Tone.Transport.ticks;
+
+        // Notify score manager BEFORE starting transport for proper synchronization
         if (scoreManager && scoreManager.scoreShown) {
             // Start polling for score following immediately
             scoreManager.currentBarStart = 0;
             scoreManager.startScoreFollowing('score', 0);
         }
-        
+
+        if (Tone.Transport._scheduledRepeatId) {
+            Tone.Transport.clear(Tone.Transport._scheduledRepeatId);
+        }
+
         // Start transport after score manager is ready
-        Tone.Transport.start();
+        if (keepPosition) {
+            Tone.Transport.start(undefined, resumeTicks);
+        } else {
+            Tone.Transport.start();
+        }
         
         // Set up progress tracking and auto-stop detection
         if (this.progressSlider) {
@@ -225,22 +270,38 @@ class Transport {
      * @param {HTMLElement} playBtn - The play button element to update
      */
     stopPlayback(playBtn) {
-        Tone.Transport.stop();
-        Tone.Transport.position = 0;
+        // Silence everything first, before touching transport or UI state.
+        const midiManager = this.app.modules.midiManager;
+        const silence = () => {
+            midiManager.sendEvent_allNotesOff();
+            midiManager.sendEvent_sustainPedalOff();
+        };
+        silence();
+
+        const scoreManager = this.app.modules.scoreManager;
+        // In fullscreen, stopping keeps the current position (pause); otherwise reset to the start.
+        const keepPosition = !!(scoreManager && scoreManager.isFullscreen);
+        if (keepPosition) {
+            Tone.Transport.pause();
+        } else {
+            Tone.Transport.stop();
+            Tone.Transport.position = 0;
+        }
+        this.playing = false;
+        silence();
         playBtn.innerText = "Play MIDI";
         
         // Notify score manager that playback stopped
-        const scoreManager = this.app.modules.scoreManager;
         if (scoreManager) {
             scoreManager.stopPollingForPlayback();
             
             // Reset score follower to beginning if active
-            if (scoreManager.scoreShown && scoreManager.scoreFollowerActive) {
+            if (!keepPosition && scoreManager.scoreShown && scoreManager.scoreFollowerActive) {
                 scoreManager.resetScoreFollower('score');
             }
         }
         
-        if (this.progressSlider) {
+        if (this.progressSlider && !keepPosition) {
             this.progressSlider.value = 0;
             this.progressSlider.style.display = "none";
         }
@@ -248,15 +309,11 @@ class Transport {
         // Clear any existing scheduled repeat events
         if (Tone.Transport._scheduledRepeatId) {
             Tone.Transport.clear(Tone.Transport._scheduledRepeatId);
+            Tone.Transport._scheduledRepeatId = null;
         }
 
-        // Send all notes off after delay to ensure all notes are released
-        setTimeout(() => {
-            this.app.modules.midiManager.sendEvent_allNotesOff();
-            this.app.modules.midiManager.sendEvent_sustainPedalOff();
-        }, 500);
-        
-        this.playing = false;
+        // Catch notes whose release was still scheduled
+        setTimeout(silence, 150);
     }
 
     /**
@@ -1822,8 +1879,9 @@ class Transport {
         this.scheduleMIDIEvents(midi);
 
         const scoreManager = this.app.modules.scoreManager;
-        if (scoreManager && scoreManager.scoreShown) {
-            await scoreManager.showScoreLoadingIndicator('score');
+        if (scoreManager) {
+            const shown = scoreManager.scoreShown;
+            if (shown) await scoreManager.showScoreLoadingIndicator('score');
             try {
                 if (typeof this.updateChannels === 'function') this.updateChannels();
                 const transformedMidi = this.createCurrentMidi() || midi;
@@ -1832,15 +1890,18 @@ class Transport {
                     scoreManager.getActiveTimeSignature(),
                     scoreManager.getActiveKeySignature()
                 );
+                // Without this the hidden score would keep ABC generated before the shift.
                 if (abcNotation) {
                     scoreManager.abcString = abcNotation;
-                    const refreshBar = this.playing ? scoreManager.getCurrentPlaybackBar() : scoreManager.currentBarStart;
-                    scoreManager.updateScoreFollower('score', refreshBar, true);
+                    if (shown) {
+                        const refreshBar = this.playing ? scoreManager.getCurrentPlaybackBar() : scoreManager.currentBarStart;
+                        scoreManager.updateScoreFollower('score', refreshBar, true);
+                    }
                 }
             } catch (e) {
                 console.error('Failed to regenerate score after restoring manual shift:', e);
             } finally {
-                scoreManager.hideScoreLoadingIndicator();
+                if (shown) scoreManager.hideScoreLoadingIndicator();
             }
         }
     }

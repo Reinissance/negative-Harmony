@@ -100,6 +100,7 @@ test('score conversion respects overrides, resets WASM state, and synchronizes c
     assert.match(abc, /^K:C\s/m);
 
     score.abcString = '';
+    score.modulesLoaded = true; // showMidiScore() awaits module loading; already set up above.
     app.modules.transport = {
         originalMidi: midiFixture([6, 8], 0),
         createCurrentMidi: () => midiFixture([6, 8], 0)

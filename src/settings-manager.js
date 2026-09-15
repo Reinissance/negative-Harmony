@@ -17,6 +17,8 @@ class SettingsManager {
         this.app = app;
         /** @type {Function} Debounced function to prevent excessive settings updates */
         this.debouncedUpdateUserSettings = Utils.debounce(this.updateUserSettings.bind(this), 300);
+        /** @type {Function} Debounced share-URL refresh after score settings change */
+        this.debouncedShare = Utils.debounce(() => this.share(), 300);
         /** @type {boolean} Tracks whether  module has been loaded */
         this.Loaded = false;
     }
@@ -131,6 +133,10 @@ class SettingsManager {
         if (channel === -1) {
             // Global setting
             state[key] = value;
+            // Keep the share URL current when score settings change.
+            if (SettingsManager.SCORE_SHARE_KEYS.includes(key)) {
+                this.debouncedShare();
+            }
         } else {
             // Channel-specific setting
             if (!state.userSettings.channels[channel]) {
@@ -430,7 +436,7 @@ class SettingsManager {
                             }
                         }
                     }
-                    this.debouncedUpdateUserSettings('timeSignature', ts, -1);
+                    this.updateUserSettings('timeSignature', ts, -1);
                 }
             } catch (e) {
                 console.warn('Failed to restore time signature from URL:', e);
@@ -446,7 +452,7 @@ class SettingsManager {
                 if (scoreManager) {
                     scoreManager.setKeySignatureUI(ks);
                 }
-                this.debouncedUpdateUserSettings('keySignature', ks, -1);
+                this.updateUserSettings('keySignature', ks, -1);
             }
         }
 
@@ -456,7 +462,7 @@ class SettingsManager {
             const unitLength = parseInt(abcUnitLengthParam, 10);
             if (!isNaN(unitLength) && unitLength > 0) {
                 state.abcUnitLength = unitLength;
-                this.debouncedUpdateUserSettings('abcUnitLength', unitLength, -1);
+                this.updateUserSettings('abcUnitLength', unitLength, -1);
             }
         }
 
@@ -466,7 +472,11 @@ class SettingsManager {
             const quantizeEl = document.getElementById('quantizeMidi');
             if (quantizeEl) quantizeEl.value = String(shortRestParam);
             state.abcShortRest = shortRestParam;
-            this.debouncedUpdateUserSettings('abcShortRest', shortRestParam, -1);
+            this.updateUserSettings('abcShortRest', shortRestParam, -1);
+        }
+
+        if (urlParams.get('quantizeEnabled') === 'true' && transport && transport.toggleQuantize) {
+            await transport.toggleQuantize(true);
         }
 
         // Regenerate the score once so restored time, key, and L: settings take
@@ -508,8 +518,8 @@ class SettingsManager {
                     if (shiftEl) shiftEl.value = scoreShiftUnitParam;
                 }
                 await transport.restoreScoreShiftTicks(ticksDelta);
-                this.debouncedUpdateUserSettings('scoreShiftTicks', ticksDelta, -1);
-                this.debouncedUpdateUserSettings('scoreShiftUnit', state.scoreShiftUnit, -1);
+                this.updateUserSettings('scoreShiftTicks', ticksDelta, -1);
+                this.updateUserSettings('scoreShiftUnit', state.scoreShiftUnit, -1);
             }
         }
     }
@@ -1098,7 +1108,9 @@ class SettingsManager {
     }
 }
 
-// Export for module usage
+SettingsManager.SCORE_SHARE_KEYS = ['timeSignature', 'keySignature', 'abcUnitLength', 'abcShortRest',
+    'scoreShiftTicks', 'scoreShiftUnit', 'quantizeEnabled'];
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = SettingsManager;
 }

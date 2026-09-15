@@ -50,6 +50,28 @@ class ScoreManager {
         this.scoreRegenerating = false;
         /** @type {boolean} Whether the score is currently displayed in fullscreen mode */
         this.isFullscreen = false;
+        /** @type {Object|null} The abcjs tune object returned by the last renderAbc() call */
+        this.visualObj = null;
+        /** @type {string} The abcString that was last rendered, used to avoid redundant re-renders */
+        this._renderedAbcString = null;
+        /** @type {Object|null} abcjs TimingCallbacks instance driving note highlighting/auto-scroll */
+        this.timingCallbacks = null;
+        /** @type {Element[]} SVG elements currently highlighted as "playing" */
+        this.highlightedElements = [];
+        /** @type {number|null} setInterval ID polling playback position during playback */
+        this.pollingInterval = null;
+        /** @type {number} Current zoom factor applied to the rendered score (1 = natural size) */
+        this.scoreZoom = 1;
+        /** @type {number} Minimum allowed zoom factor while in fullscreen (plenty of vertical space already) */
+        this.minScoreZoomFullscreen = 0.5;
+        /** @type {number} Minimum allowed zoom factor outside fullscreen - lower, so the full score
+         * height can still be zoomed down to fit the smaller windowed container */
+        this.minScoreZoomWindowed = 0.2;
+        /** @type {number} Maximum allowed zoom factor */
+        this.maxScoreZoom = 4;
+        /** @type {number} Multiplier applied to vertical drag/wheel motion when it's used to
+         * scroll the score horizontally, so that gesture feels responsive rather than 1:1 */
+        this.scoreScrollAccelerationFactor = 5.;
     }
 
     /**
@@ -80,8 +102,49 @@ class ScoreManager {
                     this.exitFullscreen(false);
                 }
             };
+            // Opening/closing the score settings changes the space left for the score.
+            const handleCollapse = (e) => {
+                if (this.isFullscreen && e.target && e.target.id === 'scoreFooterCollapse') {
+                    this.fitScoreHeight('score');
+                }
+            };
+            document.addEventListener('shown.bs.collapse', handleCollapse);
+            document.addEventListener('hidden.bs.collapse', handleCollapse);
             document.addEventListener('fullscreenchange', handleFsChange);
             document.addEventListener('webkitfullscreenchange', handleFsChange);
+        }
+        if (typeof window !== 'undefined' && window.addEventListener) {
+            // Covers orientation changes and mobile browser chrome (address bar)
+            // showing/hiding, which can resize the viewport slightly after the
+            // fullscreen transition itself has already finished.
+            let resizeTimeout = null;
+            window.addEventListener('resize', () => {
+                if (!this.scoreShown) return;
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(() => this.rerenderScoreAfterLayoutSettles('score'), 150);
+            });
+        }
+    }
+
+    /**
+     * Re-renders the score after yielding a couple of frames, so transitions
+     * that briefly report stale window dimensions (entering/exiting
+     * fullscreen, mobile address bar show/hide) have settled before the
+     * available height is measured.
+     * @param {string} containerId - Container element ID
+     */
+    rerenderScoreAfterLayoutSettles(containerId = 'score') {
+        const doRender = () => {
+            if (this.scoreFollowerActive) {
+                this.renderScoreFollower(containerId);
+            } else {
+                this.renderScore(containerId);
+            }
+        };
+        if (typeof window !== 'undefined' && window.requestAnimationFrame) {
+            window.requestAnimationFrame(() => window.requestAnimationFrame(doRender));
+        } else {
+            setTimeout(doRender, 50);
         }
     }
 
@@ -653,295 +716,10 @@ class ScoreManager {
     }
 
     /**
-     * Detects if a voice represents percussion/drum parts
-     * @param {string[]} voiceLines - Array of voice lines to analyze
-     * @returns {boolean} True if voice is percussion
-     */
-    isPercussionVoice(voiceLines) {
-        return voiceLines.some(line => {
-            const trimmed = line.trim();
-            return trimmed.startsWith('%%MIDI channel 10') || trimmed.includes('channel 10');
-        });
-    }
-
-    /**
-     * Gets the sharps and flats for a given key signature
-     * @param {string} keySignature - Key signature (e.g., 'C', 'G', 'Bb', 'F#m')
-     * @returns {Object} Object with sharps and flats arrays
-     */
-    getKeySignatureAccidentals(keySignature) {
-        const keySignatures = {
-            // Major keys with sharps
-            'C': { sharps: [], flats: [] },
-            'G': { sharps: ['F'], flats: [] },
-            'D': { sharps: ['F', 'C'], flats: [] },
-            'A': { sharps: ['F', 'C', 'G'], flats: [] },
-            'E': { sharps: ['F', 'C', 'G', 'D'], flats: [] },
-            'B': { sharps: ['F', 'C', 'G', 'D', 'A'], flats: [] },
-            'F#': { sharps: ['F', 'C', 'G', 'D', 'A', 'E'], flats: [] },
-            'C#': { sharps: ['F', 'C', 'G', 'D', 'A', 'E', 'B'], flats: [] },
-            
-            // Major keys with flats
-            'F': { sharps: [], flats: ['B'] },
-            'Bb': { sharps: [], flats: ['B', 'E'] },
-            'Eb': { sharps: [], flats: ['B', 'E', 'A'] },
-            'Ab': { sharps: [], flats: ['B', 'E', 'A', 'D'] },
-            'Db': { sharps: [], flats: ['B', 'E', 'A', 'D', 'G'] },
-            'Gb': { sharps: [], flats: ['B', 'E', 'A', 'D', 'G', 'C'] },
-            'Cb': { sharps: [], flats: ['B', 'E', 'A', 'D', 'G', 'C', 'F'] },
-            
-            // Minor keys
-            'Am': { sharps: [], flats: [] },
-            'Em': { sharps: ['F'], flats: [] },
-            'Bm': { sharps: ['F', 'C'], flats: [] },
-            'F#m': { sharps: ['F', 'C', 'G'], flats: [] },
-            'C#m': { sharps: ['F', 'C', 'G', 'D'], flats: [] },
-            'G#m': { sharps: ['F', 'C', 'G', 'D', 'A'], flats: [] },
-            'D#m': { sharps: ['F', 'C', 'G', 'D', 'A', 'E'], flats: [] },
-            'A#m': { sharps: ['F', 'C', 'G', 'D', 'A', 'E', 'B'], flats: [] },
-            
-            'Dm': { sharps: [], flats: ['B'] },
-            'Gm': { sharps: [], flats: ['B', 'E'] },
-            'Cm': { sharps: [], flats: ['B', 'E', 'A'] },
-            'Fm': { sharps: [], flats: ['B', 'E', 'A', 'D'] },
-            'Bbm': { sharps: [], flats: ['B', 'E', 'A', 'D', 'G'] },
-            'Ebm': { sharps: [], flats: ['B', 'E', 'A', 'D', 'G', 'C'] }
-        };
-        
-        return keySignatures[keySignature] || { sharps: [], flats: [] };
-    }
-
-    /**
-     * Normalizes a note string for drum notation based on key signature
-     * @param {string} noteString - ABC note string to normalize
-     * @param {string} keySignature - Current key signature
-     * @returns {string} Normalized note string
-     */
-    normalizeNoteForDrums(noteString, keySignature = 'C') {
-        if (!noteString || !keySignature) {
-            return noteString;
-        }
-
-        const accidentals = this.getKeySignatureAccidentals(keySignature);
-        
-        // Extract note components using regex
-        const noteMatch = noteString.match(/^(\^*|_+|=*)([A-Ga-g])([#b]*)([',]*)/);
-        if (!noteMatch) {
-            return noteString;
-        }
-
-        const [, explicitAccidental, noteLetter, explicitSymbols, octaveMarkers] = noteMatch;
-        const baseNote = noteLetter.toUpperCase();
-        
-        // If there's already an explicit accidental (^, _, or =), use the note as-is
-        if (explicitAccidental || explicitSymbols) {
-            // console.log(`Note ${noteString} has explicit accidental, using as-is`);
-            return noteString;
-        }
-        
-        let normalizedNote = noteLetter;
-        
-        // Apply key signature effects
-        // If the note is in the sharp list of the key signature, it should be treated as sharp
-        if (accidentals.sharps.includes(baseNote)) {
-            normalizedNote = '^' + noteLetter;
-            // console.log(`Note ${baseNote} is sharp in key ${keySignature}, treating as ${normalizedNote}`);
-        }
-        // If the note is in the flat list of the key signature, it should be treated as flat
-        else if (accidentals.flats.includes(baseNote)) {
-            normalizedNote = '_' + noteLetter;
-            // console.log(`Note ${baseNote} is flat in key ${keySignature}, treating as ${normalizedNote}`);
-        }
-        
-        // Reconstruct the full note with octave markers
-        const result = normalizedNote + octaveMarkers;
-        
-        // console.log(`Normalized ${noteString} (key: ${keySignature}) -> ${result}`);
-        return result;
-    }
-
-    /**
-     * Transposes drum notes from standard notation to percussion symbols
-     * Maps MIDI drum notes to ABC percussion notation while preserving all formatting
-     * @param {string} line - Line of ABC notation to process
-     * @param {string} keySignature - Current key signature for accidental handling
-     * @returns {string} Line with drum notes converted to percussion symbols
-     */
-    transposeDrumNotes(line, keySignature = 'C') {
-        try {
-            // console.log('Input line for drum transposition:', line);
-            // console.log('Using key signature for drums:', keySignature);
-            
-            // First, clean up any existing style markers to avoid conflicts, but preserve everything else
-            let cleanLine = line.replace(/[+ox](?=[A-Ga-g])/g, ''); // Only remove style markers directly before notes
-            // console.log('After cleanup (should be identical unless style markers removed):', cleanLine);
-            
-            // GM Drum Kit MIDI note mapping to ABC percussion notation
-            const gmDrumMapping = {
-                // MIDI 35 (Bass Drum 2) - B0
-                'B,,,': 'C',      // Bass drum -> C line
-                '=B,,,': 'C',     // Natural B -> C line
-                
-                // MIDI 36 (Bass Drum 1) - C1
-                'C,,': 'F',       // Bass drum -> F line
-                '=C,,': 'F',      // Natural C -> F line
-                
-                // MIDI 40 (Snare Drum 2) - E1
-                'E,,': 'B',      // Snare -> B line with open notehead
-                '=E,,': 'B',     // Natural E -> B line
-                
-                // MIDI 42 (Closed Hi-hat) - F#1
-                '^F,,': 'ng',     // Hi-hat -> g line with cross notehead
-                '=F,,': 'ng',     // Natural F -> g line (shouldn't happen for hi-hat but kept for safety)
-                
-                // MIDI 46 (Open Hi-hat) - F#2 
-                '^F,': 'ng',      // Open Hi-hat -> g line with cross notehead
-                
-                // MIDI 38 (Snare Drum 1) - D1
-                'D,,': 'D',       // MIDI 38 - Snare Drum 1
-                '=D,,': 'D',      // Natural D
-                
-                // MIDI 37 (Side Stick) - C#1
-                '^C,,': 'oD',     // MIDI 37 - Side Stick  
-                
-                // MIDI 39 (Hand Clap) - D#1
-                '^D,,': '^D',     // MIDI 39 - Hand Clap
-                
-                // MIDI 41 (Low Tom 2) - F1
-                'F,,': 'A',       // MIDI 41 - Low Tom 2
-                '=F,,': 'A',      // Natural F
-                
-                // MIDI 43 (Low Tom 1) - G#1
-                '^G,,': 'A',     // MIDI 43 - Low Tom 1
-                'G,,': 'A',      // Natural G (for flat keys where G# might appear as Ab)
-                
-                // MIDI 45 (Mid Tom 2) - A1
-                'A,,': 'c',      // MIDI 45 - Mid Tom 2
-                '=A,,': 'c',     // Natural A
-                
-                // MIDI 47 (Mid Tom 1) - B1
-                'B,,': 'c',       // MIDI 47 - Mid Tom 1
-                '=B,,': 'c',      // Natural B
-                
-                // MIDI 48 (High Tom 2) - C2
-                'C,': 'ne',       // MIDI 48 - High Tom 2
-                '=C,': 'ne',      // Natural C
-                
-                // MIDI 50 (High Tom 1) - D2
-                'D,': 'ne',        // MIDI 50 - High Tom 1
-                '=D,': 'ne',       // Natural D
-                
-                // MIDI 51 (Ride Cymbal 1) - D#2
-                '^D,': 'na',       // MIDI 51 - Ride Cymbal 1
-                
-                // MIDI 49 (Crash Cymbal 1) - C#2
-                '^C,': 'nb',      // Crash cymbal -> b line with plus notehead
-                'C,': 'nb',       // Natural C -> b line (for enharmonic equivalents)
-                
-                // MIDI 52 (Chinese Cymbal) - E2
-                'E,': 'ob',       // MIDI 52 - Chinese Cymbal
-                '=E,': 'ob',      // Natural E
-                
-                // MIDI 53 (Ride Bell) - F2
-                'F,': 'nb',       // MIDI 53 - Ride Bell
-                '=F,': 'nb',      // Natural F
-                
-                // MIDI 54 (Tambourine) - F#2
-                '^F,': 'oc',      // MIDI 54 - Tambourine
-                
-                // MIDI 55 (Splash Cymbal) - G2
-                'G,': 'nc',       // MIDI 55 - Splash Cymbal
-                '=G,': 'nc',      // Natural G
-                
-                // MIDI 56 (Cowbell) - G#2
-                '^G,': 'od',      // MIDI 56 - Cowbell
-                'G,': 'od',       // Natural G (for enharmonic)
-                
-                // MIDI 57 (Crash Cymbal 2) - A2
-                'A,': 'nd',       // MIDI 57 - Crash Cymbal 2
-                '=A,': 'nd',      // Natural A
-                
-                // MIDI 58 (Vibra Slap) - A#2
-                '^A,': 'ne',      // MIDI 58 - Vibra Slap
-                'A,': 'ne',       // Natural A (for enharmonic)
-                
-                // MIDI 59 (Ride Cymbal 2) - B2
-                'B,': 'oa',       // MIDI 59 - Ride Cymbal 2
-                '=B,': 'oa',      // Natural B
-                
-                // Higher octave mappings
-                'C': 'nf',        // MIDI 60+ 
-                '=C': 'nf',       // Natural C
-                'D': 'ng',        
-                '=D': 'ng',       // Natural D
-                'E': 'na',        
-                '=E': 'na',       // Natural E
-                'F': 'nb',        
-                '=F': 'nb',       // Natural F
-                'G': 'nc',        
-                '=G': 'nc',       // Natural G
-                'A': 'nd',        
-                '=A': 'nd',       // Natural A
-                'B': 'ne',        
-                '=B': 'ne'        // Natural B
-            };
-            
-            // Replace ONLY note patterns with percussion symbols, preserving ALL other characters
-            // This regex will match notes but the replacement function will preserve everything else
-            let processedLine = cleanLine.replace(/(\^*|_+|=*)([A-Ga-g])([#b]*)([',]*)/g, (match, accidental, note, symbols, octaveModifier) => {
-                const originalNote = match;
-                
-                // First normalize the note to apply key signature effects
-                const normalizedNote = this.normalizeNoteForDrums(originalNote, keySignature);
-
-                // console.log(`Processing: ${originalNote} -> normalized: ${normalizedNote}`);
-
-                // Check our GM drum mapping table
-                if (gmDrumMapping[normalizedNote]) {
-                    // console.log(`Mapped ${normalizedNote} to ${gmDrumMapping[normalizedNote]}`);
-                    return gmDrumMapping[normalizedNote];
-                }
-                
-                // Also try the original note in case normalization wasn't needed
-                if (gmDrumMapping[originalNote]) {
-                    // console.log(`Mapped ${originalNote} to ${gmDrumMapping[originalNote]}`);
-                    return gmDrumMapping[originalNote];
-                }
-                
-                // Log unmapped notes for debugging
-                // console.log(`No mapping found for: ${originalNote} (normalized: ${normalizedNote}), using default`);
-
-                // Default mapping for unmapped notes based on register
-                if (octaveModifier.includes(',')) {
-                    // Low register - likely drums
-                    if (accidental.includes('^') || symbols.includes('#')) {
-                        const result = 'o' + note; // Cross notehead for accented drums
-                        // console.log(`Default low register mapping ${originalNote} to ${result}`);
-                        return result;
-                    } else {
-                        const result = note; // Normal notehead for toms
-                        // console.log(`Default low register mapping ${originalNote} to ${result}`);
-                        return result;
-                    }
-                } else {
-                    // Higher register - likely cymbals/hi-hats
-                    const result = 'n' + note; // Cross notehead for cymbals
-                    // console.log(`Default high register mapping ${originalNote} to ${result}`);
-                    return result;
-                }
-            });
-
-            // console.log('Processed line:', processedLine);
-            return processedLine;
-            
-        } catch (error) {
-            console.warn('Error transposing drum notes in line:', line, error);
-            return line; // Return original on error
-        }
-    }
-
-    /**
-     * Renders the ABC notation as a musical score in the specified container
+     * Renders the full ABC notation as a single continuous, non-wrapping line of
+     * music inside a horizontally-scrollable container. The whole score is
+     * pre-rendered once so the user (or the auto-follow logic during playback)
+     * can scroll smoothly through it without ever needing to re-render bars.
      * @param {string} containerId - ID of the container element to render into
      */
     renderScore(containerId = 'score') {
@@ -951,81 +729,94 @@ class ScoreManager {
          }
 
          try {
-             // Clear only the score content area, not the entire container
              const scoreElement = document.getElementById(containerId);
              if (!scoreElement) return;
-             
+
              scoreElement.innerHTML = ''; // Clear previous score content
-             
-             // Set maximum height constraint
-             const maxHeight = window.innerHeight - 150;
+
+             // Set maximum height constraint; horizontal scrolling reveals the rest.
+             // overflow-y is 'auto' (not 'hidden') so zoomed-in content can also be
+             // panned vertically, not just horizontally.
+             const maxHeight = this.getScoreMaxHeight(containerId);
              scoreElement.style.maxHeight = `${maxHeight}px`;
              scoreElement.style.overflowY = 'auto';
-             scoreElement.style.overflowX = 'hidden';
-             
-             // Enhanced render options for percussion support
+             scoreElement.style.overflowX = 'auto';
+             scoreElement.style.scrollBehavior = 'smooth';
+
+             // 'wrap' forces every bar onto a single unbroken horizontal line
+             // (enabling smooth pre-rendered scrolling) while minSpacing/maxSpacing
+             // keep note spacing natural. Both preferredMeasuresPerLine and
+             // staffwidth must scale with the actual bar count: a fixed
+             // preferredMeasuresPerLine bigger than the piece reserves blank
+             // trailing space for the non-existent extra measures (short pieces),
+             // while a fixed staffwidth too small for the piece forces an
+             // unwanted second line (long pieces) - and re-running the wrap
+             // algorithm's line-fitting search over a mismatched budget is also
+             // what made rendering sluggish/prone to freezing on longer pieces.
+             const totalBars = Math.max(1, this.getTotalBarsFromABC(this.abcString) || 0);
+             const wrap = {
+                preferredMeasuresPerLine: totalBars,
+                minSpacing: 1.8,
+                maxSpacing: 2.7
+             };
+             // Generous per-bar estimate so the single line almost never falls
+             // short even for dense music - actual rendered width still only
+             // reflects real content width (maxSpacing bounds it), it's not
+             // stretched to fill this budget.
+             const staffwidth = Math.max(2000, totalBars * 500);
+
              const renderOptions = {
-                responsive: 'resize',
-                staffwidth: 740,
+                staffwidth,
+                wrap,
                 scale: 1.0,
                 foregroundColor: '#000000',
                 backgroundColor: 'transparent',
-                // Add percussion-specific options
                 percussion: true,
                 drumBars: 1
              };
-             
+
              const visualOptions = {
                 add_classes: true,
-                staffwidth: 740,
-                responsive: 'resize',
-                // Enable drum notation
+                staffwidth,
+                wrap,
                 displayPercussion: true
              };
-             
+
              // Tone represents 6/8 as three quarter-note beats, not as notation.
              // Render the converter's meter without rewriting it from playback.
-             this.abcjs.renderAbc(containerId, this.abcString, renderOptions, visualOptions);
-             
-             // Scale the rendered content to fit height constraint
+             const rendered = this.abcjs.renderAbc(containerId, this.abcString, renderOptions, visualOptions);
+             this.visualObj = (rendered && rendered[0]) || null;
+             this._renderedAbcString = this.abcString;
+
+             // Re-apply the current zoom level (persists across re-renders, e.g.
+             // when toggling fullscreen or regenerating the ABC) before measuring.
+             this.applyScoreZoom(containerId);
+
+             // (Re)bind timing callbacks to the freshly rendered tune so note
+             // highlighting and auto-scroll-follow stay in sync with the new layout.
+             this.setupTimingCallbacks();
+             this.setupScoreScrollInteractions(containerId);
+             this.setupScorePinchZoom(containerId);
+
              setTimeout(() => {
                 const scoreElement = document.getElementById(containerId);
                 if (scoreElement) {
-                    // Get the rendered SVG element
                     const svgElement = scoreElement.querySelector('svg');
                     if (svgElement) {
-                        const naturalHeight = svgElement.getBoundingClientRect().height;
-
-                        // Calculate scale factor if content exceeds max height
-                        if (naturalHeight > maxHeight) {
-                            const scaleFactor = maxHeight / naturalHeight;
-                            
-                            // Apply transform to scale down while preserving proportions
-                            svgElement.style.transform = `scale(${scaleFactor})`;
-                            svgElement.style.transformOrigin = 'top center';
-                            
-                            // Calculate the actual scaled height and adjust container
-                            const scaledHeight = naturalHeight * scaleFactor;
-                            scoreElement.style.height = `${scaledHeight}px`;
-                            scoreElement.style.overflow = 'hidden';
-                            scoreElement.style.paddingBottom = '10px';
-
-                            // console.log(`Scaled score by ${scaleFactor.toFixed(2)} to fit ${maxHeight}px height (actual: ${scaledHeight}px)`);
-
-                        } else {
-                            // If no scaling needed, set container height to natural height
-                            scoreElement.style.height = `${naturalHeight}px`;
-                            scoreElement.style.overflow = 'hidden';
-                        }
+                        this.fitScoreHeight(containerId);
                     }
-                    
-                    // Enhanced CSS for drum notation
-                    const style = document.createElement('style');
+
+                    // Enhanced CSS for drum notation, plus the red "currently playing" highlight
+                    let style = document.getElementById(`${containerId}-dynamic-style`);
+                    if (!style) {
+                        style = document.createElement('style');
+                        style.id = `${containerId}-dynamic-style`;
+                        document.head.appendChild(style);
+                    }
                     style.textContent = `
                         #${containerId} {
-                            max-height: ${maxHeight}px;
-                            overflow-y: hidden;
-                            overflow-x: hidden;
+                            overflow-y: auto;
+                            overflow-x: auto;
                         }
                         #${containerId} .abcjs-note,
                         #${containerId} .abcjs-note_selected,
@@ -1046,410 +837,327 @@ class ScoreManager {
                             fill: #000000 !important;
                             color: #000000 !important;
                         }
+                        #${containerId} .note-playing,
+                        #${containerId} .note-playing * {
+                            fill: #d00000 !important;
+                            stroke: #d00000 !important;
+                        }
                     `;
-                    document.head.appendChild(style);
                 }
             }, 100);
-            
+
             // console.log('ABC score rendered successfully');
         } catch (error) {
             console.error('Error rendering ABC score:', error);
         }
     }
-    
+
     /**
-     * Extracts specific bars from a single voice while handling percussion conversion
-     * @param {string[]} voiceLines - Lines belonging to this voice
-     * @param {number} startBar - Starting bar number (0-based)
-     * @param {number} numBars - Number of bars to extract
-     * @param {boolean} isPercussion - Whether this voice is percussion
-     * @param {string} originalKeySignature - Original key signature for processing
-     * @returns {Object} Object with voiceHeader and bars array
+     * Maximum height for the score element. In fullscreen it is derived from the
+     * space left in the container below the score (so the open/closed score
+     * settings are accounted for), otherwise from the window height.
+     * @param {string} containerId - Container element ID
+     * @returns {number} Height in px
      */
-    extractBarsFromVoice(voiceLines, startBar, numBars, isPercussion = false, originalKeySignature = 'C') {
-        // console.log(voiceLines);
-        let voiceHeader = '';
-        let currentBar = 0;
-        let collectedBars = [];
-        let remainingBarsNeeded = numBars;
-
-        // First pass: collect ONLY the specific bars we need for clef detection
-        let relevantBarsContent = [];
-        let tempCurrentBar = 0;
-        
-        // Check if this voice is a percussion track (MIDI channel 10)
-        const isPercussionTrack = voiceLines.some(line => {
-            const trimmed = line.trim();
-            return trimmed.startsWith('%%MIDI channel 10') || trimmed.includes('channel 10');
-        });
-        
-        for (let lineIndex = 0; lineIndex < voiceLines.length; lineIndex++) {
-            const line = voiceLines[lineIndex];
-            const trimmedLine = line.trim();
-            
-            if (trimmedLine.startsWith('V:')) {
-                voiceHeader = line;
-                continue;
-            }
-
-            if (trimmedLine.length === 0) continue;
-
-            // Skip ABC directives
-            if (trimmedLine.startsWith('%%') || trimmedLine.startsWith('%')) {
-                continue;
-            }
-
-            // Split line into individual bars by pipe symbols
-            const barSections = trimmedLine.split('|').filter(section => section.trim().length > 0);
-            const lineHasBars = barSections.length > 0;
-            
-            if (!lineHasBars) {
-                if (tempCurrentBar >= startBar && tempCurrentBar < startBar + numBars) {
-                    relevantBarsContent.push(line.trim());
-                }
-                tempCurrentBar++;
-                continue;
-            }
-
-            // Extract only the specific bars we need from this line
-            for (let i = 0; i < barSections.length; i++) {
-                if (tempCurrentBar >= startBar && tempCurrentBar < startBar + numBars) {
-                    relevantBarsContent.push(barSections[i].trim());
-                }
-                tempCurrentBar++;
+    getScoreMaxHeight(containerId = 'score') {
+        const el = document.getElementById(containerId);
+        const container = document.getElementById('scoreContainer');
+        if (!this.isFullscreen || !el || !container || !el.parentElement) {
+            return window.innerHeight - 150;
+        }
+        const wrapper = el.parentElement;
+        const contentBottom = container.getBoundingClientRect().bottom
+            - parseFloat(getComputedStyle(container).paddingBottom);
+        let below = 0;
+        for (let sib = wrapper.nextElementSibling; sib; sib = sib.nextElementSibling) {
+            if (sib.getClientRects().length) {
+                below = sib.getBoundingClientRect().bottom - wrapper.getBoundingClientRect().bottom;
             }
         }
-
-        // Now check clef only for the specific bars being displayed
-        const combinedRelevantContent = relevantBarsContent.join(' ');
-        
-        const hasBassNotes = /([FEDC],|[A-G],{2,})/.test(combinedRelevantContent);
-        const hasTrebleNotes = /([a-g]|[A-G](?![,])|[GAB],(?![,]))/.test(combinedRelevantContent);
-
-        // Apply clef to voice header
-        if (voiceHeader && !voiceHeader.includes('clef=')) {
-            if (isPercussionTrack || isPercussion) {
-                voiceHeader = voiceHeader.trim() + ' clef=perc';
-            }
-            else if (hasBassNotes) {
-                voiceHeader = voiceHeader.trim() + ' clef=bass';
-            }
-            else if (hasTrebleNotes) {
-                voiceHeader = voiceHeader.trim() + ' clef=treble';
-            }
-            else {
-                voiceHeader = voiceHeader.trim() + ' clef=treble';
-            }
-        }
-
-        // Second pass: actually extract the bars (reusing existing logic)
-        currentBar = 0;
-        
-        for (let lineIndex = 0; lineIndex < voiceLines.length; lineIndex++) {
-            const line = voiceLines[lineIndex];
-            const trimmedLine = line.trim();
-            
-            if (trimmedLine.startsWith('V:')) {
-                continue;
-            }
-
-            if (trimmedLine.length === 0) continue;
-
-            // Skip ABC directives (they don't count as bars)
-            if (trimmedLine.startsWith('%%') || trimmedLine.startsWith('%')) {
-                if (startBar === 0 && remainingBarsNeeded === numBars) {
-                    collectedBars.push(line);
-                }
-                continue;
-            }
-
-            // Split line into individual bars by pipe symbols
-            const barSections = trimmedLine.split('|').filter(section => section.trim().length > 0);
-            const lineHasBars = barSections.length > 0;
-            
-            if (!lineHasBars) {
-                if (currentBar >= startBar && currentBar < startBar + numBars && remainingBarsNeeded > 0) {
-                    collectedBars.push(line);
-                    remainingBarsNeeded--;
-                }
-                currentBar++;
-                continue;
-            }
-
-            // Process each bar in this line
-            let lineResult = [];
-            let barsAddedFromThisLine = 0;
-            
-            for (let i = 0; i < barSections.length && remainingBarsNeeded > 0; i++) {
-                const barSection = barSections[i];
-                
-                if (currentBar >= startBar && currentBar < startBar + numBars) {
-                    lineResult.push(barSection);
-                    barsAddedFromThisLine++;
-                    remainingBarsNeeded--;
-                }
-                currentBar++;
-            }
-            
-            if (lineResult.length > 0) {
-                const reconstructedLine = lineResult.join('|');
-                collectedBars.push(reconstructedLine + '|');
-            }
-            
-            if (remainingBarsNeeded <= 0) {
-                break;
-            }
-        }
-
-        let combinedBars = '';
-        if (collectedBars.length > 0) {
-            const directives = collectedBars.filter(bar => bar.trim().startsWith('%%') || bar.trim().startsWith('%'));
-            const musicalBars = collectedBars.filter(bar => !bar.trim().startsWith('%%') && !bar.trim().startsWith('%'));
-            
-            const combinedMusical = musicalBars.join(' ').replace(/\|\s*\|/g, '|');
-            
-            if (combinedMusical.trim()) {
-                combinedBars = combinedMusical;
-                if (!combinedBars.endsWith('|')) {
-                    combinedBars += '|';
-                }
-            } else if (directives.length > 0) {
-                combinedBars = directives.join('\n');
-            }
-        }
-
-        // Process extracted bars for percussion if needed
-        let processedBars = combinedBars ? [combinedBars] : [];
-        
-        if ((isPercussion || isPercussionTrack) && processedBars.length > 0) {
-            // console.log('Processing extracted percussion bars with key signature:', originalKeySignature);
-            processedBars = processedBars.map(bar => {
-                if (bar.trim().startsWith('%%') || bar.trim().startsWith('%')) {
-                    return bar; // Don't process directive lines
-                }
-                // console.log('Processing percussion bar:', bar);
-                const processedBar = this.transposeDrumNotes(bar, originalKeySignature);
-                // console.log('Transposed drum bar:', processedBar);
-                return processedBar;
-            });
-        }
-
-        return {
-            voiceHeader,
-            bars: processedBars
-        };
+        return Math.max(200, Math.floor(contentBottom - el.getBoundingClientRect().top - below));
     }
 
     /**
-     * Extracts a specific range of bars from ABC notation for score following
-     * @param {string} abcString - Full ABC notation string
-     * @param {number} startBar - Starting bar number (0-based, default: 0)
-     * @param {number} numBars - Number of bars to extract (default: 4)
-     * @returns {string} ABC notation containing only the specified bars
+     * Sizes the score element to its rendered content, capped by the available
+     * height. Does not re-render.
+     * @param {string} containerId - Container element ID
      */
-    extractBarsFromABC(abcString, startBar = 0, numBars = 4) {
-        if (!abcString || !abcString.trim()) {
-            console.warn('Empty ABC string provided to extractBarsFromABC');
-            return '';
-        }
-
-        const lines = abcString.split('\n');
-        const result = [];
-        let inMusicSection = false;
-        let voiceLines = {};
-        let headerLines = [];
-        let originalKeySignature = 'C'; // Track the original key signature
-
-        // First pass: collect headers and identify voices
-        for (const line of lines) {
-            const trimmedLine = line.trim();
-            
-            // Skip empty lines
-            if (trimmedLine.length === 0) continue;
-            
-            // Header lines (before music starts)
-            if (trimmedLine.startsWith('X:') || trimmedLine.startsWith('T:') || 
-                trimmedLine.startsWith('M:') || trimmedLine.startsWith('L:') || 
-                trimmedLine.startsWith('K:')) {
-                
-                // Capture original key signature
-                if (trimmedLine.startsWith('K:')) {
-                    const keyMatch = trimmedLine.match(/K:\s*([A-G][#b]?m?)/);
-                    if (keyMatch) {
-                        originalKeySignature = keyMatch[1];
-                        // console.log('Detected original key signature:', originalKeySignature);
-                    }
-                }
-                
-                headerLines.push(line);
-                continue;
-            }
-
-            // Skip Q: (tempo) lines completely
-            if (trimmedLine.startsWith('Q:')) {
-                continue;
-            }
-
-            // Voice definition or music line
-            if (trimmedLine.startsWith('V:') || (inMusicSection && trimmedLine.length > 0)) {
-                inMusicSection = true;
-                
-                // Handle voice lines
-                if (trimmedLine.startsWith('V:')) {
-                    const voiceMatch = trimmedLine.match(/V:\s*([^\s]+)/);
-                    const voiceId = voiceMatch ? voiceMatch[1] : 'default';
-                    if (!voiceLines[voiceId]) {
-                        voiceLines[voiceId] = [];
-                    }
-                    voiceLines[voiceId].push(line);
-                } else if (trimmedLine.length > 0) {
-                    // Find the current voice (last voice declared)
-                    const voiceIds = Object.keys(voiceLines);
-                    const currentVoice = voiceIds[voiceIds.length - 1] || 'default';
-                    if (!voiceLines[currentVoice]) {
-                        voiceLines[currentVoice] = [];
-                    }
-                    voiceLines[currentVoice].push(line);
-                }
-            }
-        }
-
-        // If no voices found, treat everything as one voice
-        if (Object.keys(voiceLines).length === 0) {
-            voiceLines['default'] = [];
-            for (const line of lines) {
-                const trimmedLine = line.trim();
-                if (trimmedLine.length > 0 && 
-                    !trimmedLine.startsWith('X:') && !trimmedLine.startsWith('T:') && 
-                    !trimmedLine.startsWith('M:') && !trimmedLine.startsWith('L:') && 
-                    !trimmedLine.startsWith('K:') && !trimmedLine.startsWith('Q:')) {
-                    voiceLines['default'].push(line);
-                }
-            }
-        }
-
-        // Helper function to check if a voice has actual musical content
-        const hasMusicalContent = (voiceContent) => {
-            for (const line of voiceContent) {
-                const trimmed = line.trim();
-                
-                // Skip voice headers and directives
-                if (trimmed.startsWith('V:') || trimmed.startsWith('%%') || trimmed.startsWith('%') || trimmed.length === 0) {
-                    continue;
-                }
-                
-                // Check if line contains actual notes (A-G)
-                const hasNotes = /[A-Ga-g]/.test(trimmed);
-                
-                // If we find any line with actual notes, this voice has musical content
-                if (hasNotes) {
-                    return true;
-                }
-            }
-            
-            return false;
-        };
-
-        // Second pass: extract exactly numBars for each voice that has musical content
-        const extractedVoices = {};
-        let hasPercussion = false;
-        
-        for (const [voiceId, voiceContent] of Object.entries(voiceLines)) {
-            // Check if voice has actual musical content
-            if (!hasMusicalContent(voiceContent)) {
-                continue;
-            }
-            
-            // Check if this voice is percussion
-            const isPercussion = this.isPercussionVoice(voiceContent);
-            if (isPercussion) {
-                hasPercussion = true;
-                // console.log(`Voice ${voiceId} is percussion, will process after extraction`);
-            }
-            
-            // Extract bars and pass percussion info for processing
-            extractedVoices[voiceId] = this.extractBarsFromVoice(voiceContent, startBar, numBars, isPercussion, originalKeySignature);
-            
-            // Double-check that the extracted content actually has notes
-            const extractedContent = extractedVoices[voiceId];
-            if (extractedContent.bars.length === 0 || 
-                extractedContent.bars.every(bar => /^[zZ0-9\s|]*$/.test(bar))) {
-                delete extractedVoices[voiceId];
-            }
-        }
-
-        // Only proceed if we have voices with content
-        if (Object.keys(extractedVoices).length === 0) {
-            return '';
-        }
-
-        // Reconstruct ABC with headers and extracted bars from active voices only
-        result.push(...headerLines);
-        
-        // Add percussion style directives if we have percussion
-        if (hasPercussion) {
-            result.push('U:n=!style=x!');
-            result.push('U:o=!style=harmonic!');
-            result.push('U:^=!style=triangle!');
-            // console.log('Added percussion style directives to extracted ABC');
-        }
-        
-        for (const [voiceId, extractedContent] of Object.entries(extractedVoices)) {
-            if (extractedContent.voiceHeader) {
-                result.push(extractedContent.voiceHeader);
-            }
-            result.push(...extractedContent.bars);
-        }
-
-        const finalResult = result.join('\n');
-        
-        if (!finalResult || !finalResult.trim()) {
-            return '';
-        }
-
-        // console.log('Extracted ABC with percussion processing:', finalResult);
-        return finalResult;
+    fitScoreHeight(containerId = 'score') {
+        const el = document.getElementById(containerId);
+        const svg = el && el.querySelector('svg');
+        if (!svg) return;
+        const cs = getComputedStyle(el);
+        const extra = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+            + (el.offsetHeight - el.clientHeight);
+        const maxHeight = this.getScoreMaxHeight(containerId);
+        // getBoundingClientRect() already reflects the applied zoom transform.
+        const desired = svg.getBoundingClientRect().height + extra;
+        el.style.maxHeight = `${maxHeight}px`;
+        el.style.height = `${Math.min(desired, maxHeight)}px`;
     }
 
     /**
-     * Generates ABC notation for score following starting at a specific bar
-     * @param {number} startBar - Starting bar number (0-based, default: 0)
-     * @returns {string} ABC notation for the specified bar range
+     * (Re)creates the abcjs TimingCallbacks bound to the currently rendered tune.
+     * Used purely to look up (via its noteTimings table, see
+     * findScoreEventAtTime()), for any given playback position, which note
+     * elements are currently sounding and where they sit horizontally - no
+     * cursor line or vanishing-note animation from abcjs is used, and its own
+     * eventCallback/setProgress mechanism is intentionally not used (see
+     * syncTimingToPlayback()).
      */
-    generateScoreFollower(startBar = 0) {
-        if (!this.abcString || !this.abcString.trim()) {
-            console.warn('No ABC data available for score following');
-            return '';
+    setupTimingCallbacks() {
+        this.clearNoteHighlights();
+        this._scoreEvents = [];
+        if (!this.abcjs || !this.visualObj || !this.abcjs.TimingCallbacks) {
+            this.timingCallbacks = null;
+            return;
         }
-        
-        // Ensure totalBars is available
-        if (!this.totalBars || typeof this.totalBars !== 'number' || this.totalBars <= 0) {
-            this.totalBars = this.getTotalBarsFromABC();
-        }
-        
-        const remainingBars = Math.max(0, this.totalBars - startBar);
-        if (remainingBars <= 0) {
-            // nothing left to show
-            return '';
-        }
+        this.timingCallbacks = new this.abcjs.TimingCallbacks(this.visualObj, {});
+        // Cache just the actual note/chord/rest entries (sorted by time, and - since
+        // the whole tune is rendered as one unbroken line - also sorted by x position)
+        // so findScoreEventAtTime()/findScoreEventAtPixel() can binary-search them directly.
+        this._scoreEvents = (this.timingCallbacks.noteTimings || []).filter((t) => t.type === 'event');
+    }
 
-        // Request up to 4 bars but not more than remain
-        let numBars = Math.min(4, remainingBars);
-        let followingABC = '';
 
-        // Try to extract; if empty, try with fewer bars down to 1
-        while (numBars > 0) {
-            followingABC = this.extractBarsFromABC(this.abcString, startBar, numBars);
-            if (followingABC && followingABC.trim()) break;
-            numBars--;
+    /**
+     * Called by TimingCallbacks for every currently-sounding note/chord event.
+     * Highlights the relevant note elements in red and centers the score view
+     * on the event's horizontal position (clamped at the start/end of the piece).
+     * @param {Object|null} ev - abcjs timing event, or null at the end of the tune
+     */
+    onScoreTimingEvent(ev) {
+        this.clearNoteHighlights();
+        if (!ev) return;
+
+        const elements = Array.isArray(ev.elements) ? ev.elements.flat(Infinity) : [];
+        elements.forEach((el) => el && el.classList && el.classList.add('note-playing'));
+        this.highlightedElements = elements;
+
+        if (typeof ev.left === 'number') {
+            this.centerScoreOnPosition(ev.left, ev.width || 0);
         }
+    }
 
-        if (!followingABC || !followingABC.trim()) {
-            console.warn(`Bar extraction returned empty result for startBar ${startBar}`);
-            return '';
+    /**
+     * Removes the "currently playing" highlight from any previously-highlighted
+     * note elements.
+     */
+    clearNoteHighlights() {
+        if (this.highlightedElements && this.highlightedElements.length) {
+            this.highlightedElements.forEach((el) => el && el.classList && el.classList.remove('note-playing'));
         }
+        this.highlightedElements = [];
+    }
 
-        return followingABC;
+    /**
+     * Scrolls the score container so the given horizontal SVG position is
+     * centered in the visible viewport, clamped so it never scrolls past the
+     * beginning or end of the rendered score.
+     * @param {string} containerId - Container element ID
+     * @param {number} left - Horizontal position (px) of the event in the SVG
+     * @param {number} width - Width (px) of the event
+     */
+    centerScoreOnPosition(left, width = 0, containerId = 'score') {
+        const scoreElement = document.getElementById(containerId);
+        if (!scoreElement) return;
+        // Don't fight the user's own scrolling/scrubbing.
+        if (Date.now() < (this._manualScrollUntil || 0)) return;
+        const zoom = this.scoreZoom || 1;
+        const targetCenter = (left + width / 2) * zoom;
+        const maxScroll = Math.max(0, scoreElement.scrollWidth - scoreElement.clientWidth);
+        const desiredScrollLeft = Math.max(0, Math.min(maxScroll, targetCenter - scoreElement.clientWidth / 2));
+        // Skip redundant writes - avoids fighting the in-flight smooth-scroll
+        // animation and extra layout work on every single note event.
+        if (Math.abs(scoreElement.scrollLeft - desiredScrollLeft) < 2) return;
+        scoreElement.scrollLeft = desiredScrollLeft;
+    }
+
+    /**
+     * Allows scrolling the (horizontally-scrollable) score with a regular
+     * vertical mouse wheel, in addition to native trackpad/touch horizontal
+     * scrolling. Bound once per container element.
+     * @param {string} containerId - Container element ID
+     */
+    setupScoreScrollInteractions(containerId = 'score') {
+        const el = document.getElementById(containerId);
+        if (!el || el._wheelScrollBound) return;
+        el._wheelScrollBound = true;
+        el.addEventListener('wheel', (e) => {
+            // Browsers report trackpad pinch gestures as wheel events with
+            // ctrlKey set, so treat those as zoom rather than scroll.
+            if (e.ctrlKey) {
+                e.preventDefault();
+                const rect = el.getBoundingClientRect();
+                const anchor = {
+                    clientX: e.clientX,
+                    clientY: e.clientY,
+                    contentX: (el.scrollLeft + e.clientX - rect.left) / (this.scoreZoom || 1),
+                    contentY: (el.scrollTop + e.clientY - rect.top) / (this.scoreZoom || 1)
+                };
+                const zoomDelta = -e.deltaY * 0.01;
+                this.setScoreZoom((this.scoreZoom || 1) * (1 + zoomDelta), containerId, anchor);
+                return;
+            }
+            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                e.preventDefault();
+                const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+                const next = Math.max(0, Math.min(maxScroll, el.scrollLeft + e.deltaY * this.scoreScrollAccelerationFactor));
+                // Instant (not smooth) so successive wheel ticks accumulate from the real
+                // position instead of an in-flight animation, and so the seek below
+                // reads the final position.
+                el.scrollTo({ left: next, behavior: 'instant' });
+                // In fullscreen, where the position slider stays visible as a
+                // scrubber, keep it (and the actual playback position) in sync
+                // with this manual vertical-gesture scroll.
+                if (this.isFullscreen) {
+                    this._manualScrollUntil = Date.now() + 250;
+                    this.seekPlaybackToScrollPosition(containerId);
+                }
+            }
+        }, { passive: false });
+
+        // Native touch dragging scrolls the container directly; scrub playback with it too.
+        let touchScrubbing = false;
+        el.addEventListener('touchstart', (e) => { touchScrubbing = e.touches.length === 1; }, { passive: true });
+        el.addEventListener('touchend', () => { touchScrubbing = false; });
+        el.addEventListener('touchcancel', () => { touchScrubbing = false; });
+        el.addEventListener('scroll', () => {
+            if (!touchScrubbing || !this.isFullscreen) return;
+            this._manualScrollUntil = Date.now() + 250;
+            this.seekPlaybackToScrollPosition(containerId);
+        }, { passive: true });
+    }
+
+    /**
+     * Enables pinch-to-zoom on the score container via two-finger touch
+     * gestures. Zooming is implemented as a CSS transform on the rendered
+     * score content (not a full re-render), so it's cheap and keeps the
+     * score-follower's auto-scroll/centering logic (centerScoreOnPosition)
+     * working unchanged - it simply scales the position it scrolls to by the
+     * current zoom factor. Bound once per container element.
+     * @param {string} containerId - Container element ID
+     */
+    setupScorePinchZoom(containerId = 'score') {
+        const el = document.getElementById(containerId);
+        if (!el || el._pinchZoomBound) return;
+        el._pinchZoomBound = true;
+
+        let pinchStartDistance = null;
+        let pinchStartZoom = 1;
+        let pinchAnchor = null;
+
+        const touchDistance = (touches) => {
+            const dx = touches[0].clientX - touches[1].clientX;
+            const dy = touches[0].clientY - touches[1].clientY;
+            return Math.hypot(dx, dy);
+        };
+
+        el.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                pinchStartDistance = touchDistance(e.touches);
+                pinchStartZoom = this.scoreZoom || 1;
+                const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                const rect = el.getBoundingClientRect();
+                pinchAnchor = {
+                    clientX: midX,
+                    clientY: midY,
+                    contentX: (el.scrollLeft + midX - rect.left) / pinchStartZoom,
+                    contentY: (el.scrollTop + midY - rect.top) / pinchStartZoom
+                };
+            }
+        }, { passive: true });
+
+        el.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 2 && pinchStartDistance) {
+                e.preventDefault();
+                const newDistance = touchDistance(e.touches);
+                const newZoom = pinchStartZoom * (newDistance / pinchStartDistance);
+                this.setScoreZoom(newZoom, containerId, pinchAnchor);
+            }
+        }, { passive: false });
+
+        const endPinch = (e) => {
+            if (e.touches.length < 2) {
+                pinchStartDistance = null;
+                pinchAnchor = null;
+            }
+        };
+        el.addEventListener('touchend', endPinch);
+        el.addEventListener('touchcancel', endPinch);
+    }
+
+    /**
+     * Sets the score zoom factor (clamped to [minScoreZoomFullscreen/minScoreZoomWindowed, maxScoreZoom]),
+     * applies it as a CSS transform, and - if an anchor point is given - keeps
+     * that point stationary under the fingers/cursor by adjusting scroll
+     * position accordingly.
+     * @param {number} zoom - Desired zoom factor
+     * @param {string} containerId - Container element ID
+     * @param {{clientX: number, clientY: number, contentX: number, contentY: number}|null} anchor
+     *   Point to keep stationary, in viewport and unscaled-content coordinates
+     */
+    setScoreZoom(zoom, containerId = 'score', anchor = null) {
+        const minZoom = this.isFullscreen ? this.minScoreZoomFullscreen : this.minScoreZoomWindowed;
+        const clamped = Math.max(minZoom, Math.min(this.maxScoreZoom, zoom));
+        this.scoreZoom = clamped;
+        this.applyScoreZoom(containerId);
+
+        const el = document.getElementById(containerId);
+        if (el && anchor) {
+            const rect = el.getBoundingClientRect();
+            const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth);
+            const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+            const desiredLeft = anchor.contentX * clamped - (anchor.clientX - rect.left);
+            const desiredTop = anchor.contentY * clamped - (anchor.clientY - rect.top);
+            el.scrollLeft = Math.max(0, Math.min(maxScrollLeft, desiredLeft));
+            el.scrollTop = Math.max(0, Math.min(maxScrollTop, desiredTop));
+        }
+    }
+
+    /**
+     * Applies the current this.scoreZoom as a CSS transform on the rendered
+     * score's root element, scaling it in place without re-rendering.
+     * @param {string} containerId - Container element ID
+     */
+    applyScoreZoom(containerId = 'score') {
+        const el = document.getElementById(containerId);
+        if (!el) return;
+        const content = el.firstElementChild;
+        if (!content) return;
+        content.style.transformOrigin = '0 0';
+        content.style.transform = `scale(${this.scoreZoom || 1})`;
+    }
+
+
+    /**
+     * Clears the "Updating score..." placeholder state and resumes score-follower
+     * polling updates. Does not touch the DOM directly - the caller is expected to
+     * immediately re-render (e.g. via updateScoreFollower/renderScoreFollower),
+     * which will replace the placeholder content.
+     */
+    hideScoreLoadingIndicator() {
+        this.scoreRegenerating = false;
+    }
+
+    /**
+     * Re-renders the full score (the whole tune is always rendered as one
+     * continuous scrollable line - see renderScore()). Kept as a distinct
+     * entry point for callers that used to request a specific bar window;
+     * the startBar parameter is no longer needed but is accepted for
+     * backwards compatibility.
+     * @param {string} containerId - Container element ID (default: 'score')
+     */
+    renderScoreFollower(containerId = 'score') {
+        if (!this.scoreAvailable) {
+            return;
+        }
+        this.renderScore(containerId);
+        const transport = this.app.modules.transport;
+        if (this.scoreFollowerActive && transport && transport.playing) {
+            this.syncTimingToPlayback();
+        }
     }
 
     /**
@@ -1479,48 +1187,6 @@ class ScoreManager {
                 setTimeout(resolve, 0);
             }
         });
-    }
-
-    /**
-     * Clears the "Updating score..." placeholder state and resumes score-follower
-     * polling updates. Does not touch the DOM directly - the caller is expected to
-     * immediately re-render (e.g. via updateScoreFollower/renderScoreFollower),
-     * which will replace the placeholder content.
-     */
-    hideScoreLoadingIndicator() {
-        this.scoreRegenerating = false;
-    }
-
-    /**
-     * Renders score follower showing a specific 4-bar window
-     * @param {string} containerId - Container element ID (default: 'score')
-     * @param {number} startBar - Starting bar number (0-based, default: 0)
-     */
-    renderScoreFollower(containerId = 'score', startBar = 0) {
-        if (!this.scoreAvailable) {
-            return;
-        }
-
-        // console.log(`Rendering score follower: bars ${startBar}-${startBar + 3}`);
-        
-        const followingABC = this.generateScoreFollower(startBar);
-        
-        if (!followingABC || !followingABC.trim()) {
-            this.showAbcErrorNotification(`No ABC data to render for bars ${startBar}-${startBar + 3}`);
-            return;
-        }
-
-        // Temporarily store original ABC and use following ABC
-        const originalABC = this.abcString;
-        this.abcString = followingABC;
-        
-        // Render the score follower
-        this.renderScore(containerId);
-        
-        // Restore original ABC
-        this.abcString = originalABC;
-        
-        // console.log('Score follower rendered successfully');
     }
 
     /**
@@ -1651,10 +1317,9 @@ class ScoreManager {
      * @param {string} containerId - Container element ID (default: 'score')
      */
     async resetScoreFollower(containerId = 'score') {
-        // console.log('Resetting score follower to beginning');
         this.currentBarStart = 0;
         this.lastPolledBar = null; // Reset polling state
-        
+
         // Check if we have ABC data before trying to render
         if (!this.abcString || !this.abcString.trim()) {
             console.warn('No ABC data available for reset, regenerating...');
@@ -1681,20 +1346,15 @@ class ScoreManager {
                      console.warn('No current MIDI available for regeneration');
                  }
              }
-             this.renderScoreFollower(containerId, this.currentBarStart);
-         }
-         else {
-             setTimeout(() => {
-                 this.renderScoreFollower(containerId, this.currentBarStart);
-             }, 500);
          }
 
-         // Update display
-         const display = document.getElementById('currentBarDisplay');
-         if (display) {
-             display.textContent = this.currentBarStart;
-         }
-     }
+        this.renderScore(containerId);
+        const scoreElement = document.getElementById(containerId);
+        if (scoreElement) {
+            scoreElement.scrollLeft = 0;
+        }
+    }
+
 
     /**
      * Displays the MIDI score with optional score following
@@ -1707,7 +1367,22 @@ class ScoreManager {
              console.error('no file loaded or score elements not found');
              return;
          }
-         
+
+         // Show feedback immediately and make sure abcjs/midi2abc have actually
+         // finished loading before generating/rendering - otherwise a render
+         // attempted before the dynamically-loaded abcjs script arrives
+         // silently no-ops and this placeholder is never replaced.
+         scoreDiv.innerHTML = '<p style="padding: 20px; text-align: center;">🔄 Generating score…</p>';
+         try {
+             await this.loadModules();
+         } catch (err) {
+             console.error('Failed to load score modules:', err);
+         }
+         if (!this.abcjs) {
+             scoreDiv.innerHTML = '<p>Could not load the score renderer. Please try again.</p>';
+             return;
+         }
+
          // Check if we have a valid ABC string already
          if (!this.abcString || this.abcString.trim().length === 0) {
              // Try to regenerate ABC
@@ -1723,9 +1398,6 @@ class ScoreManager {
                      console.error('Failed to create current MIDI');
                      return;
                  }
-
-                 // Clear only the score content area, not the header
-                 scoreDiv.innerHTML = '<p>Generating score...</p>';
 
                  // prefer UI selects, then Tone.Transport, then MIDI header
                  const ts = this.getActiveTimeSignature();
@@ -1743,67 +1415,21 @@ class ScoreManager {
              }
          }
          
-         // Clear only the score content area, not the header
-         scoreDiv.innerHTML = '<p>Generating score...</p>';
-         
          // Show the container
          document.getElementById("showScore").style.display = 'none';
          
          // Use score following or regular rendering
          if (useScoreFollowing) {
-            // console.log('Starting score follower mode');
-            
-            // Determine starting bar based on playback state
-            let startBar = 0;
-            const transport = this.app.modules.transport;
-            if (transport && transport.playing) {
-                // Get current playback position and calculate bar
-                startBar = this.getCurrentPlaybackBar();
-                // console.log('Playback is active, starting score follower at bar:', startBar);
-            } else {
-                // console.log('Playback not active, starting score follower at beginning');
-            }
-            
-            this.startScoreFollowing('score', startBar);
-            
+            this.startScoreFollowing('score');
+
             // If playback is already running, start polling immediately
+            const transport = this.app.modules.transport;
             if (transport && transport.playing) {
                 this.startPollingForPlayback('score');
             }
-            
+
         } else {
             this.renderScore('score');
-        }
-    }
-
-    /**
-     * Adds manual controls for score follower navigation (for testing/debugging)
-     * @param {HTMLElement} container - Container element to add controls to
-     */
-    addScoreFollowerControls(container) {
-        // Check if controls already exist
-        if (container.querySelector('.score-follower-controls')) {
-            return;
-        }
-        
-        const controlsDiv = document.createElement('div');
-        controlsDiv.className = 'score-follower-controls';
-        controlsDiv.style.cssText = 'margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px;';
-        
-        controlsDiv.innerHTML = `
-            <button class="btn btn-sm btn-outline-light" onclick="app.modules.scoreManager.resetScoreFollower('score')">Reset</button>
-            <button class="btn btn-sm btn-outline-light" onclick="app.modules.scoreManager.advanceScoreFollower('score', 4)">Next 4 Bars</button>
-            <button class="btn btn-sm btn-outline-light" onclick="app.modules.scoreManager.advanceScoreFollower('score', -4)">Prev 4 Bars</button>
-            <span style="margin-left: 10px; color: #ccc;">Current Bar: <span id="currentBarDisplay">${this.currentBarStart}</span></span>
-        `;
-        // controlsDiv.style.maxWidth = '870px';
-
-        // Insert after the header
-        const header = container.querySelector('.score-header');
-        if (header && header.nextSibling) {
-            container.insertBefore(controlsDiv, header.nextSibling);
-        } else {
-            container.appendChild(controlsDiv);
         }
     }
 
@@ -2036,86 +1662,68 @@ class ScoreManager {
 
 
     /**
-     * Updates the score follower to show the current playback position
+     * Resyncs the score follower's note-highlighting/auto-scroll to the
+     * current playback position. Called after the ABC has been regenerated
+     * (e.g. reversed playback toggled, MIDI edited) so the follower never
+     * operates on stale data. barNumber/immediately are accepted for
+     * backwards compatibility but no longer change what is rendered, since
+     * the whole score is always rendered as a single continuous line.
      * @param {string} containerId - Container element ID
-     * @param {number} barNumber - Current bar number being played
-     * @param {boolean} immediately - Whether to update immediately without debouncing
      */
-    updateScoreFollower(containerId, barNumber, immediately = false) {
-
-        // Update current bar display
-        const display = document.getElementById('currentBarDisplay');
-        if (display) {
-            display.textContent = `Bar: ${barNumber + 1} (Window: ${this.currentBarStart + 1}-${this.currentBarStart + 4})`;
-        }
-        
-        // Calculate which 4-bar window this bar belongs to. barNumber already indexes
-        // directly into whichever ABC is currently displayed (forward or reversed -
-        // see clampBarIndex()/getCurrentPlaybackBar()), so no reversal is applied here.
-        let targetWindow = Math.floor(barNumber / 4) * 4;
-
-        // Update if we've moved to a different 4-bar window or immediately requested
-        if (targetWindow !== this.currentBarStart || immediately) {
-            this.currentBarStart = targetWindow;
-            // console.log(`Score follower updating to bars ${this.currentBarStart}-${this.currentBarStart + 3} (current bar: ${barNumber})`);
-            
-            // Clear any pending updates
-            if (this.updateTimeout) {
-                clearTimeout(this.updateTimeout);
-                this.updateTimeout = null;
-            }
-            
-            // Update immediately without delay
-            this.renderScoreFollower(containerId, this.currentBarStart);
+    updateScoreFollower(containerId = 'score') {
+        this.renderScore(containerId);
+        const transport = this.app.modules.transport;
+        if (transport && transport.playing) {
+            this.syncTimingToPlayback();
         }
     }
 
     /**
-     * Starts score following mode with real-time playback synchronization
+     * Starts score following mode: renders the full score (if not already
+     * rendered) and begins polling playback position to drive note
+     * highlighting and auto-scroll-centering.
      * @param {string} containerId - Container element ID (default: 'score')
-     * @param {number} startBar - Starting bar number (default: 0)
      */
-    startScoreFollowing(containerId = 'score', startBar = 0) {
+    startScoreFollowing(containerId = 'score') {
         if (!this.scoreAvailable) {
             return;
         }
 
-        // console.log(`Starting score following at bar ${startBar}...`);
         this.scoreFollowerActive = true;
-        
-        // Get the actual current playback position instead of using startBar parameter
-        const currentBar = this.getCurrentPlaybackBar();
-        this.currentBarStart = Math.floor(currentBar / 4) * 4; // Align to 4-bar boundaries
-        this.lastPolledBar = null; // Reset polling state
-        
-        // console.log(`Score follower starting at bar ${currentBar}, window: ${this.currentBarStart}-${this.currentBarStart + 3}`);
-        
-        // Initial render with immediate update
-        this.renderScoreFollower(containerId, this.currentBarStart);
-        
-        // console.log('Score follower ready - starting polling immediately');
-        
-        // Start polling immediately rather than waiting
+        this.currentBarStart = 0;
+        this.lastPolledBar = null;
+
+        if (!this.visualObj || this._renderedAbcString !== this.abcString) {
+            this.renderScore(containerId);
+        } else {
+            this.setupTimingCallbacks();
+        }
+
+        const scoreElement = document.getElementById(containerId);
+        if (scoreElement && !this.isFullscreen) {
+            scoreElement.scrollLeft = 0;
+        }
+
         this.startPollingForPlayback(containerId);
     }
 
     /**
-     * Starts polling the transport for playback position updates
+     * Starts polling the transport for playback position updates, syncing
+     * note highlighting and auto-scroll-centering to the current position.
      * @param {string} containerId - Container element ID for updates
      */
     startPollingForPlayback(containerId) {
         if (this.pollingInterval) {
             clearInterval(this.pollingInterval);
         }
-        
+
         if (!this.scoreFollowerActive) {
             return;
         }
 
-        // Start polling immediately with higher frequency
         this.pollingInterval = setInterval(() => {
             const transport = this.app.modules.transport;
-            
+
             // Only poll if transport is actually playing
             if (!transport || !transport.playing) {
                 this.stopPollingForPlayback();
@@ -2123,50 +1731,114 @@ class ScoreManager {
             }
 
             // Skip updates while the ABC/score is being regenerated (e.g. after
-            // toggling reversed playback) so we never render against stale or
-            // mismatched bar/ABC data. The code that triggers regeneration is
+            // toggling reversed playback) so we never sync against stale or
+            // mismatched data. The code that triggers regeneration is
             // responsible for calling updateScoreFollower() itself once ready.
             if (this.scoreRegenerating) {
                 return;
             }
-            
-            // Compute fractional bar from Tone position (reuse detection logic)
-            let effectiveBar = this.getCurrentPlaybackBar();
 
-            try {
-                if (window.Tone && window.Tone.Transport && typeof window.Tone.Transport.position === 'string') {
-                    const parts = window.Tone.Transport.position.split(':').map(p => parseInt(p, 10) || 0);
-                    const [bars = 0, beats = 0, sixteenths = 0] = parts;
+            this.syncTimingToPlayback();
+        }, 50);
+    }
 
-                    let beatsPerBar = 4;
-                    const ts = window.Tone.Transport.timeSignature;
-                    if (typeof ts === 'number') beatsPerBar = ts;
-                    else if (Array.isArray(ts)) beatsPerBar = ts[0] || 4;
+    /**
+     * Feeds the current Tone.Transport playback position into the score
+     * follower (converted to "musical" seconds, i.e. unaffected by the
+     * playback speed multiplier and direction) and highlights/centers the
+     * note actually sounding at that position.
+     */
+    syncTimingToPlayback() {
+        if (!this.timingCallbacks || typeof window === 'undefined' || !window.Tone) {
+            return;
+        }
+        try {
+            const state = this.app.state;
+            const speed = state.speed || 1;
+            const wallDuration = (this.app.track_duration || 0) / speed;
+            const wallPos = window.Tone.Transport.seconds || 0;
+            const effectiveWall = state.reversedPlayback ? (wallDuration - wallPos) : wallPos;
+            const musicalSeconds = Math.max(0, effectiveWall * speed);
+            // abcjs's own setProgress()/eventCallback highlights the *next
+            // upcoming* event (the first one at/after the given time) rather
+            // than the one currently sounding, which made the highlight look
+            // like it was running ahead of the audio and skipped the very
+            // first note - so find and highlight the current event ourselves.
+            const event = this.findScoreEventAtTime(musicalSeconds * 1000);
+            this.onScoreTimingEvent(event);
+        } catch (err) {
+            console.warn('Could not sync score timing to playback:', err);
+        }
+    }
 
-                    let barFloat = bars + (beats / Math.max(1, beatsPerBar)) + (sixteenths / (Math.max(1, beatsPerBar) * 4));
-                    if (this._tonePositionOneBased) barFloat = Math.max(0, barFloat - 1);
+    /**
+     * Finds the note/chord event that is actually sounding at a given time.
+     * @param {number} currentMs - Position in milliseconds from the start of the tune
+     * @returns {Object|null} The abcjs timing event, or null if none has started yet
+     */
+    findScoreEventAtTime(currentMs) {
+        const events = this._scoreEvents;
+        if (!events || !events.length) return null;
 
-                    const ADVANCE_THRESHOLD = 0.6;
-                    const progress = (beats + (sixteenths / 4)) / Math.max(1, beatsPerBar);
-                    // Use barFloat to compute current integer bar and possibly advance
-                    let currentIntBar = Math.floor(barFloat);
-                    if (progress >= ADVANCE_THRESHOLD) currentIntBar = currentIntBar + 1;
-
-                    // Tone.Transport's bar count already indexes directly into whichever
-                    // ABC is currently displayed (forward or reversed) - see clampBarIndex().
-                    effectiveBar = this.clampBarIndex(Math.max(0, currentIntBar));
-                }
-            } catch (err) {
-                // silent fallback - use getCurrentPlaybackBar result
+        let lo = 0, hi = events.length - 1, idx = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (events[mid].milliseconds <= currentMs) {
+                idx = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
             }
+        }
+        return idx >= 0 ? events[idx] : null;
+    }
 
-            // Update only when effectiveBar has changed since last poll
-            if (effectiveBar !== null && effectiveBar !== this.lastPolledBar) {
-                this.lastPolledBar = effectiveBar;
-                // Update immediately without timeout
-                this.updateScoreFollower(containerId, effectiveBar);
+    /**
+     * Finds the note/chord event whose horizontal position is closest to (at
+     * or before) the given content-space X coordinate - the inverse of
+     * centerScoreOnPosition() - used to seek playback to wherever the user
+     * has manually scrolled the score to.
+     * @param {number} contentX - X position in unscaled score/SVG coordinates
+     * @returns {Object|null} The nearest abcjs timing event, or null if none found
+     */
+    findScoreEventAtPixel(contentX) {
+        const events = this._scoreEvents;
+        if (!events || !events.length) return null;
+
+        let lo = 0, hi = events.length - 1, idx = 0;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (typeof events[mid].left === 'number' && events[mid].left <= contentX) {
+                idx = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
             }
-        }, 50); // Even more frequent polling for better responsiveness
+        }
+        return events[idx];
+    }
+
+    /**
+     * Seeks playback to the musical position the score is currently scrolled
+     * to (its visible center), and updates the progress slider to match.
+     * @param {string} containerId - Container element ID
+     */
+    seekPlaybackToScrollPosition(containerId = 'score') {
+        const transport = this.app.modules.transport;
+        if (!transport || typeof transport.seekToPiecePosition !== 'function') return;
+
+        const scoreElement = document.getElementById(containerId);
+        if (!scoreElement) return;
+
+        const zoom = this.scoreZoom || 1;
+        const contentX = (scoreElement.scrollLeft + scoreElement.clientWidth / 2) / zoom;
+        const event = this.findScoreEventAtPixel(contentX);
+        if (!event || typeof event.milliseconds !== 'number') return;
+
+        const state = this.app.state;
+        const speed = state.speed || 1;
+        const piecePosition = (event.milliseconds / 1000) / speed;
+        transport.seekToPiecePosition(piecePosition, { syncScore: false });
     }
 
     /**
@@ -2174,7 +1846,6 @@ class ScoreManager {
      */
     stopPollingForPlayback() {
         if (this.pollingInterval) {
-            // console.log('Stopping score following polling (playback stopped)');
             clearInterval(this.pollingInterval);
             this.pollingInterval = null;
         }
@@ -2184,58 +1855,18 @@ class ScoreManager {
      * Stops all score following activity and cleans up resources
      */
     stopScoreFollowing() {
-        // console.log('Stopping score following...');
         this.scoreFollowerActive = false;
         this.lastPolledBar = null;
-        
+
         // Clear any pending updates
         if (this.updateTimeout) {
             clearTimeout(this.updateTimeout);
             this.updateTimeout = null;
         }
-        
-        // Stop polling
+
         this.stopPollingForPlayback();
-        
-        // Remove controls
-        const controls = document.querySelector('.score-follower-controls');
-        if (controls) {
-            controls.remove();
-        }
-    }
-
-    /**
-     * Manually advances the score follower by a specified number of bars,
-     * regenerating the ABC from the current MIDI if it has changed.
-     * @param {string} containerId - Container element ID (default: 'score')
-     * @param {number} bars - Number of bars to advance (can be negative, default: 4)
-     */
-    async advanceScoreFollower(containerId = 'score', bars = 4) {
-        // Update the MIDI and get the latest ABC notation before rendering
-        // so the score follower always reflects the current MIDI state.
-        try {
-            const updatedABC = await this.updateMidiAndGetABC();
-            if (updatedABC) {
-                this.abcString = updatedABC;
-            }
-        } catch (err) {
-            console.error('Error updating ABC before advancing score follower:', err);
-        }
-
-        const newStart = Math.max(0, this.currentBarStart + bars);
-
-        // Basic bounds checking - don't go beyond reasonable limits
-        if (newStart >= 0) {
-            this.currentBarStart = newStart;
-            // console.log(`Manually advancing to bar ${this.currentBarStart}`);
-            this.renderScoreFollower(containerId, this.currentBarStart);
-            
-            // Update display
-            const display = document.getElementById('currentBarDisplay');
-            if (display) {
-                display.textContent = this.currentBarStart;
-            }
-        }
+        this.clearNoteHighlights();
+        this.timingCallbacks = null;
     }
 
     /**
@@ -2381,18 +2012,16 @@ class ScoreManager {
             overlay.style.display = 'flex';
         }
 
+        let nativeTransition = null;
         if (scoreContainer && scoreContainer.requestFullscreen) {
-            scoreContainer.requestFullscreen().catch(() => {});
+            nativeTransition = scoreContainer.requestFullscreen().catch(() => {});
         } else if (typeof document !== 'undefined' && document.documentElement && document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch(() => {});
+            nativeTransition = document.documentElement.requestFullscreen().catch(() => {});
         }
 
-        // Re-render score to adapt to fullscreen dimensions
-        if (this.scoreFollowerActive) {
-            this.renderScoreFollower('score', this.currentBarStart);
-        } else {
-            this.renderScore('score');
-        }
+        // Wait for the native fullscreen transition (if any) to actually finish
+        // before measuring the window, so the re-render uses the real fullscreen size.
+        Promise.resolve(nativeTransition).then(() => this.rerenderScoreAfterLayoutSettles('score'));
     }
 
     /**
@@ -2412,11 +2041,12 @@ class ScoreManager {
             fsBtn.classList.add('btn-outline-info');
         }
 
+        let nativeTransition = null;
         if (requestExitNative && typeof document !== 'undefined') {
             if (document.fullscreenElement) {
-                document.exitFullscreen().catch(() => {});
+                nativeTransition = document.exitFullscreen().catch(() => {});
             } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
-                document.webkitExitFullscreen().catch(() => {});
+                nativeTransition = document.webkitExitFullscreen();
             }
         }
 
@@ -2432,12 +2062,10 @@ class ScoreManager {
             overlay.style.display = 'none';
         }
 
-        // Re-render score to adapt back to standard view
-        if (this.scoreFollowerActive) {
-            this.renderScoreFollower('score', this.currentBarStart);
-        } else {
-            this.renderScore('score');
-        }
+        // Wait for the native fullscreen exit (if any) to actually finish before
+        // re-measuring - on small/mobile screens the browser's address bar can
+        // reappear just after this, briefly reporting stale window dimensions.
+        Promise.resolve(nativeTransition).then(() => this.rerenderScoreAfterLayoutSettles('score'));
     }
 
     /**
@@ -2495,9 +2123,6 @@ class ScoreManager {
         } catch (e) {
             this.syncToneTimeSignatureFromABC();
         }
-
-        // Add manual controls
-        this.addScoreFollowerControls(scoreContainer);
     }
 
     /**
