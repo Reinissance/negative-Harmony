@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Virtual score stress test</title>
+<style>body{font:16px system-ui;margin:24px}#score{background:#fff;border:1px solid #888;height:500px}#result{white-space:pre-wrap}</style>
+<h1>Virtual score stress test</h1>
+<p>24 voices × 2,000 bars. Automated checks use the real ABCJS renderer.</p>
+<pre id="result">Running…</pre>
+<div id="scoreContainer"><div id="score"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.5.1/abcjs-basic-min.min.js"></script>
+<script src="../src/virtual-score.js"></script>
+<script src="../src/score-manager.js"></script>
+<script>
+window.done = (async () => {
+  const result = document.getElementById('result');
+  const wait = () => new Promise(r => setTimeout(r, 700));
+  const check = (value, message) => { if (!value) throw Error(message); };
+  try {
+    const app = { state:{speed:1}, track_duration:4000, modules:{transport:{playing:false}} };
+    const manager = new ScoreManager(app);
+    manager.abcjs = ABCJS;
+    manager.scoreShown = true;
+    manager.abcString = 'X:1\nM:4/4\nL:1/8\nQ:1/4=120\nK:C % 0 sharps\n' +
+      Array.from({length:24}, (_,i) => `V:${i+1} name="Voice ${i+1}"\n`+'C2 D2 E2 F2|'.repeat(2000)).join('\n');
+    window.Tone = {Transport:{seconds:0}};
+    let renders = 0;
+    const realRender = ABCJS.renderAbc;
+    ABCJS.renderAbc = (...args) => { renders++; return realRender(...args); };
+    manager.renderScore();
+    await wait();
+    check(document.querySelectorAll('#score svg').length > 0, 'No SVG rendered');
+    check(document.querySelectorAll('#score .abcjs-note').length > 0, 'No notes rendered');
+    const original = manager.virtualScore;
+    for (let i=0;i<500;i++) {
+      Tone.Transport.seconds = i*8;
+      manager.syncTimingToPlayback();
+    }
+    await wait();
+    check(original.mounted.has(499), 'Seek did not reach final section');
+    check(original.mounted.size <= 3, 'Unbounded sections after seeking');
+    check(renders < 10, 'Intermediate seeks were rendered');
+    document.getElementById('score').scrollLeft = original.offset(100);
+    document.getElementById('score').dispatchEvent(new Event('scroll'));
+    await wait();
+    check(original.mounted.has(100), 'Scroll target not rendered');
+    check(!original.mounted.has(499), 'Old section was not released');
+    app.state.speed = 2;
+    app.state.reversedPlayback = true;
+    Tone.Transport.seconds = 1877;
+    manager.syncTimingToPlayback();
+    check(original.lastTime === 3754000, 'Already-reversed score must follow forward elapsed time');
+    app.state.speed = 1;
+    app.state.reversedPlayback = false;
+    manager.scoreZoom = 0.2;
+    manager.applyScoreZoom();
+    await wait();
+    check(original.mounted.size <= 7, 'Zoom exceeded memory bound');
+    const svgCount = document.querySelectorAll('#score svg').length;
+    manager.virtualScore.dispose();
+    manager.virtualScore = null;
+    check(document.querySelectorAll('#score svg').length === 0, 'Disposal leaked SVGs');
+    manager.scoreZoom = 0.5;
+    Tone.Transport.seconds = 0;
+    manager.renderScore();
+    await wait();
+    result.textContent = `PASS: large-score rendering, 500 rapid seeks, distant scrolling, zoom, and disposal.\nMaximum allowed mounted sections: 7; SVGs at zoom-out: ${svgCount}; renders before reopening: ${renders}.`;
+  } catch (error) {
+    result.textContent = 'FAIL: ' + error.stack;
+    console.error(error);
+  }
+  return result.textContent;
+})();
+</script>

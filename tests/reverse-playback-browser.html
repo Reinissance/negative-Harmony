@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<base href="../">
+<link rel="icon" href="data:,">
+<style>body{font:16px system-ui;margin:20px}#score{width:800px;max-width:100%;height:250px;overflow:auto}pre{white-space:pre-wrap}</style>
+<h1>Reverse playback clock and score</h1>
+<pre id="result">Running actual Tone.js playback…</pre>
+<div id="scoreContainer"><div id="score"></div></div>
+<input id="progress-input" type="range" min="0" max="100" step="any">
+<button id="play">Play</button>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.35/Tone.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.5.1/abcjs-basic-min.min.js"></script>
+<script src="src/virtual-score.js"></script>
+<script src="src/score-manager.js"></script>
+<script src="src/transport.js"></script>
+<script>
+window.done = (async () => {
+    const check = (v, message) => { if (!v) throw Error(message); };
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const app = { state:{speed:1,reversedPlayback:true},track_duration:200,modules:{} };
+    const transport = app.modules.transport = new Transport(app);
+    app.modules.midiManager = {sendEvent_allNotesOff(){}};
+    const score = app.modules.scoreManager = new ScoreManager(app);
+    transport.progressSlider = document.getElementById('progress-input');
+    const button = document.getElementById('play');
+    score.abcjs = ABCJS;
+    score.scoreShown = true;
+    score.abcString = 'X:1\nM:4/4\nL:1/8\nQ:1/4=120\nK:C\nV:1\n' + 'G2 F2 E2 D2|'.repeat(100);
+    const result = document.getElementById('result');
+    try {
+        await Tone.start();
+        const audioStart = Tone.getContext().rawContext.currentTime;
+        const audioDeadline = Date.now() + 15000;
+        while (Tone.getContext().rawContext.currentTime < audioStart + .5 && Date.now() < audioDeadline) await wait(100);
+        check(Tone.getContext().rawContext.currentTime >= audioStart + .5, 'Audio clock did not start');
+        Tone.Transport.bpm.value = 120;
+        // Ordinary playback must restart at the beginning of the reversed score.
+        Tone.Transport.seconds = 199;
+        transport.startPlayback(button);
+        await wait(300);
+        check(score.virtualScore.lastTime < 1000, 'Playback started on the final score page');
+        Tone.Transport.pause();
+        score.stopPollingForPlayback();
+        await wait(200); // allow Tone's look-ahead pause to reach the audio clock
+        // Fullscreen preserves the playhead. A numeric start offset is seconds.
+        score.isFullscreen = true;
+        Tone.Transport.seconds = 6.8;
+        transport.startPlayback(button);
+        const deadline = Date.now() + 10000;
+        while ((Tone.Transport.seconds < 6.9 || Number(transport.progressSlider.value) < 90) && Date.now() < deadline) await wait(100);
+        const samples = [];
+        for (let i=0;i<5;i++) {
+            await wait(300);
+            const section = score.virtualScore.index.atTime(score.virtualScore.lastTime);
+            const eventIndex = score.virtualScore.mounted.get(section)?.events.findIndex(e =>
+                e.elements?.flat(Infinity).includes(score.highlightedElements[0]));
+            samples.push({time:Tone.Transport.seconds,score:score.virtualScore.lastTime,
+                section, noteOrder: section * 10000 + eventIndex,
+                slider:Number(transport.progressSlider.value)});
+        }
+        check(samples[0].time > 6 && samples.at(-1).time < 11, 'Fullscreen resume used the wrong time units: '+JSON.stringify(samples));
+        check(samples.every((s,i) => !i || s.score >= samples[i-1].score), 'Score ran backwards');
+        check(samples.every((s,i) => !i || s.section >= samples[i-1].section), 'Pages ran backwards');
+        check(samples.at(-1).section > samples[0].section, 'Playback never crossed a page boundary');
+        check(samples.every((s,i) => !i || s.noteOrder >= samples[i-1].noteOrder)
+            && samples.at(-1).noteOrder > samples[0].noteOrder, 'Highlighted notes did not advance');
+        check(samples.at(-1).slider < samples[0].slider, 'Reverse slider did not move backwards: '+JSON.stringify(samples));
+        check(samples.every(s => Math.abs(s.time*1000-s.score)<200), 'Score diverged from the running clock');
+        check(score.highlightedElements.length > 0, 'No highlighted notes during playback');
+        transport.seekToPiecePosition(198);
+        await wait(200);
+        check(score.virtualScore.lastTime < 3000, 'Right slider seek did not return to first page');
+        result.textContent = 'PASS: actual Tone.js clock advances, reversed slider decreases, score pages/highlights advance, fullscreen resumes in seconds, and slider seeking stays aligned.';
+    } catch(error) {
+        result.textContent = 'FAIL: '+error.stack;
+    } finally {
+        score.stopPollingForPlayback();
+        Tone.Transport.stop();
+        Tone.Transport.cancel();
+        transport.playing = false;
+    }
+    return result.textContent;
+})();
+</script>

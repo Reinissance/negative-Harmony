@@ -2,8 +2,16 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const ScoreManager = require('../src/score-manager.js');
+// Fullscreen DOM movement is independent of the separately tested viewport.
+global.VirtualScore = class {
+    constructor(_manager, el) { this.root = { parentNode: el }; }
+    zoom() {}
+    dispose() {}
+    follow() {}
+};
 
 class MockElement {
+    addEventListener() {}
     constructor(id, tagName = 'div') {
         this.id = id;
         this.tagName = tagName;

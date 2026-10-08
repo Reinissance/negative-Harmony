@@ -160,9 +160,10 @@ class Transport {
         // playback - sync it directly here so seeking (e.g. dragging the slider,
         // or scrolling the score) still moves the score's highlighted/scrolled position.
         // syncScore is false when the score itself initiated the seek, to avoid a feedback loop.
-        if (!this.playing && syncScore) {
+        if (syncScore) {
             const scoreManager = this.app.modules.scoreManager;
             if (scoreManager && scoreManager.scoreShown) {
+                scoreManager._manualScrollUntil = 0;
                 scoreManager.syncTimingToPlayback();
             }
         }
@@ -209,7 +210,9 @@ class Transport {
         if (!keepPosition || Tone.Transport.seconds >= wallDuration - 0.05) {
             Tone.Transport.position = 0;
         }
-        const resumeTicks = Tone.Transport.ticks;
+        // Tone.start's numeric offset is seconds, NOT ticks. Passing ticks
+        // jumps far beyond the piece and sends the score to its final section.
+        const resumeSeconds = Tone.Transport.seconds;
 
         // Notify score manager BEFORE starting transport for proper synchronization
         if (scoreManager && scoreManager.scoreShown) {
@@ -224,7 +227,7 @@ class Transport {
 
         // Start transport after score manager is ready
         if (keepPosition) {
-            Tone.Transport.start(undefined, resumeTicks);
+            Tone.Transport.start(undefined, resumeSeconds);
         } else {
             Tone.Transport.start();
         }
@@ -233,6 +236,8 @@ class Transport {
         if (this.progressSlider) {
             this.progressSlider.style.display = "block";
             const state = this.app.state;
+            const initialProgress = wallDuration ? (resumeSeconds / wallDuration) * 100 : 0;
+            this.progressSlider.value = state.reversedPlayback ? 100 - initialProgress : initialProgress;
             
             // Schedule regular progress updates during playback
             Tone.Transport._scheduledRepeatId = Tone.Transport.scheduleRepeat((time) => {
@@ -1814,20 +1819,24 @@ class Transport {
         if (midi.header) {
             if (Array.isArray(midi.header.tempos)) {
                 midi.header.tempos.forEach(t => {
-                    t.ticks = Math.max(0, Math.round((t.ticks || 0) + ticksDelta));
+                    if (t.ticks > 0) t.ticks = Math.max(0, Math.round(t.ticks + ticksDelta));
                 });
             }
             if (Array.isArray(midi.header.timeSignatures)) {
                 midi.header.timeSignatures.forEach(ts => {
-                    ts.ticks = Math.max(0, Math.round((ts.ticks || 0) + ticksDelta));
+                    if (ts.ticks > 0) ts.ticks = Math.max(0, Math.round(ts.ticks + ticksDelta));
                 });
             }
             if (Array.isArray(midi.header.keySignatures)) {
                 midi.header.keySignatures.forEach(ks => {
-                    ks.ticks = Math.max(0, Math.round((ks.ticks || 0) + ticksDelta));
+                    if (ks.ticks > 0) ks.ticks = Math.max(0, Math.round(ks.ticks + ticksDelta));
                 });
             }
         }
+
+        // Tone MIDI caches tempo-event seconds. Rebuild them before note.time,
+        // duration, and playback scheduling are read after the shift.
+        midi.header?.update?.();
 
         // Recompute overall duration (max of note end times) to avoid writing to getter-only properties.
         let recomputedDuration = 0;

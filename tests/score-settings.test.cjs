@@ -4,7 +4,19 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const ScoreManager = require('../src/score-manager.js');
-const factory = require('../src/midi2abc/midi2abc.js');
+// This suite verifies settings/conversion; viewport lifecycle is exercised separately.
+const { ScoreSectionIndex } = require('../src/virtual-score.js');
+global.VirtualScore = class {
+    constructor(manager, el, abc) {
+        this.root = { parentNode: el };
+        manager.abcjs.renderAbc('score', new ScoreSectionIndex(abc).abc(0));
+    }
+    zoom() {}
+    dispose() {}
+    follow() {}
+};
+global.Worker = require('./helpers/browser-worker.cjs');
+const { pathToFileURL } = require('node:url');
 
 function variableLength(value) {
     const bytes = [value & 127];
@@ -46,9 +58,10 @@ test('score conversion respects overrides, resets WASM state, and synchronizes c
         keySignature: select(['auto', -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6]),
         showScore: { style: {} },
         quantizeMidi: select(['off', 4, 8, 16]),
-        score: { style: {}, innerHTML: '', querySelector: () => null }
+        score: { style: {}, innerHTML: '', querySelector: () => null, addEventListener() {} }
     };
     global.document = {
+        baseURI: pathToFileURL(path.resolve('index.html')).href,
         getElementById: id => elements[id],
         createElement: () => ({}),
         head: { appendChild() {} }
@@ -59,13 +72,14 @@ test('score conversion respects overrides, resets WASM state, and synchronizes c
         get: () => beats,
         set: ts => { beats = Array.isArray(ts) ? ts[0] * 4 / ts[1] : ts; }
     });
-    global.window = { midi2abcModule: factory, Tone: { Transport: transport }, innerHeight: 800 };
+    global.window = { Tone: { Transport: transport }, innerHeight: 800 };
     const app = { state: {}, modules: {} };
     const score = new ScoreManager(app);
     app.modules.scoreManager = score;
     score.midi2abcReady = true;
     score.midi2abcBinary = fs.readFileSync(path.join(__dirname, '../src/midi2abc/midi2abc.wasm'));
     score.showAbcErrorNotification = message => assert.fail(message);
+    score.setScoreLoadingMessage = () => {};
 
     for (const [meter, sharps, keyName] of [
         [[6, 8], 1, 'G'], [[3, 4], -1, 'F'], [[12, 8], 0, 'C'], [[4, 4], 2, 'D']

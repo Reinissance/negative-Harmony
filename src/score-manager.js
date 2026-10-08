@@ -9,6 +9,7 @@
  * @class ScoreManager
  */
 class ScoreManager {
+    static gmNames = ('Acoustic Grand Piano|Bright Acoustic Piano|Electric Grand Piano|Honky-tonk Piano|Electric Piano 1|Electric Piano 2|Harpsichord|Clavinet|Celesta|Glockenspiel|Music Box|Vibraphone|Marimba|Xylophone|Tubular Bells|Dulcimer|Drawbar Organ|Percussive Organ|Rock Organ|Church Organ|Reed Organ|Accordion|Harmonica|Tango Accordion|Acoustic Guitar (nylon)|Acoustic Guitar (steel)|Electric Guitar (jazz)|Electric Guitar (clean)|Electric Guitar (muted)|Overdriven Guitar|Distortion Guitar|Guitar Harmonics|Acoustic Bass|Electric Bass (finger)|Electric Bass (pick)|Fretless Bass|Slap Bass 1|Slap Bass 2|Synth Bass 1|Synth Bass 2|Violin|Viola|Cello|Contrabass|Tremolo Strings|Pizzicato Strings|Orchestral Harp|Timpani|String Ensemble 1|String Ensemble 2|Synth Strings 1|Synth Strings 2|Choir Aahs|Voice Oohs|Synth Voice|Orchestra Hit|Trumpet|Trombone|Tuba|Muted Trumpet|French Horn|Brass Section|Synth Brass 1|Synth Brass 2|Soprano Sax|Alto Sax|Tenor Sax|Baritone Sax|Oboe|English Horn|Bassoon|Clarinet|Piccolo|Flute|Recorder|Pan Flute|Blown Bottle|Shakuhachi|Whistle|Ocarina|Lead 1 (square)|Lead 2 (sawtooth)|Lead 3 (calliope)|Lead 4 (chiff)|Lead 5 (charang)|Lead 6 (voice)|Lead 7 (fifths)|Lead 8 (bass + lead)|Pad 1 (new age)|Pad 2 (warm)|Pad 3 (polysynth)|Pad 4 (choir)|Pad 5 (bowed)|Pad 6 (metallic)|Pad 7 (halo)|Pad 8 (sweep)|FX 1 (rain)|FX 2 (soundtrack)|FX 3 (crystal)|FX 4 (atmosphere)|FX 5 (brightness)|FX 6 (goblins)|FX 7 (echoes)|FX 8 (sci-fi)|Sitar|Banjo|Shamisen|Koto|Kalimba|Bag Pipe|Fiddle|Shanai|Tinkle Bell|Agogo|Steel Drums|Woodblock|Taiko Drum|Melodic Tom|Synth Drum|Reverse Cymbal|Guitar Fret Noise|Breath Noise|Seashore|Bird Tweet|Telephone Ring|Helicopter|Applause|Gunshot').split('|');
     /**
      * Creates an instance of ScoreManager
      * @param {Object} app - Reference to the main application instance
@@ -19,8 +20,8 @@ class ScoreManager {
         this.abcString = '';
         /** @type {boolean} Whether the midi2abc WASM module is ready */
         this.midi2abcReady = false;
-        /** @type {Object} Reference to the midi2abc WASM module */
-        this.midi2abc = null;
+        this.conversionRequest = 0;
+        this.pendingConversion = null;
         /** @type {Object} Reference to the ABCJS library for rendering */
         this.abcjs = null;
         /** @type {boolean} Whether required modules have been loaded */
@@ -149,7 +150,7 @@ class ScoreManager {
     }
 
     /**
-     * Dynamically loads required modules (midi2abc WASM and ABCJS library)
+     * Loads ABCJS for rendering. Conversion code loads only inside the worker.
      * Similar to SettingsManager's loadModule pattern - loads on demand for better performance
      * @returns {Promise<void>} Resolves when all modules are loaded
      */
@@ -161,10 +162,6 @@ class ScoreManager {
             }
 
             const modules = [
-                {
-                    src: `./src/midi2abc/midi2abc.js?v=${Date.now()}`,
-                    type: 'wasm'
-                },
                 {
                     src: 'https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.5.1/abcjs-basic-min.min.js',
                     integrity: 'sha512-g2wj9XoJ7DsQgUBGWlAXhRlCV2eOUB7VV5XUsrLKf0I0hvDvOBGOLIP1XBOiXdE6Gp6MUoMkr/mbdwz4C/kwDw==',
@@ -187,21 +184,10 @@ class ScoreManager {
                 script.onload = () => {
                     loadedCount++;
                     
-                    // Initialize WASM module if this is the midi2abc script
-                    if (module.type === 'wasm' && window.midi2abcModule) {
-                        this.initializeMidi2abc().then(() => {
-                            if (loadedCount === totalModules) {
-                                this.modulesLoaded = true;
-                                this.abcjs = window.ABCJS;
-                                resolve();
-                            }
-                        }).catch(reject);
-                    } else {
-                        if (loadedCount === totalModules) {
-                            this.modulesLoaded = true;
-                            this.abcjs = window.ABCJS;
-                            resolve();
-                        }
+                    if (loadedCount === totalModules) {
+                        this.modulesLoaded = true;
+                        this.abcjs = window.ABCJS;
+                        resolve();
                     }
                 };
                 
@@ -225,17 +211,61 @@ class ScoreManager {
      * @returns {Promise<void>} Resolves when WASM module is ready
      */
     async initializeMidi2abc() {
-        if (!window.midi2abcModule) {
-            throw new Error('midi2abcModule not found');
+        if (this.midi2abcBinary) return;
+        if (!this.binaryLoading) {
+            this.binaryLoading = (async () => {
+                const response = await fetch('./src/midi2abc/midi2abc.wasm');
+                if (!response.ok) throw new Error(`Failed to load midi2abc WASM: HTTP ${response.status}`);
+                this.midi2abcBinary = new Uint8Array(await response.arrayBuffer());
+                this.midi2abcReady = true;
+            })().finally(() => { this.binaryLoading = null; });
         }
-        // Download once; each conversion needs fresh C globals, not another call
-        // to main() on an instance that retains the previous file's meter/state.
-        const response = await fetch('./src/midi2abc/midi2abc.wasm');
-        if (!response.ok) {
-            throw new Error(`Failed to load midi2abc WASM: HTTP ${response.status}`);
-        }
-        this.midi2abcBinary = new Uint8Array(await response.arrayBuffer());
-        this.midi2abcReady = true;
+        await this.binaryLoading;
+    }
+
+    cancelConversion() {
+        ++this.conversionRequest;
+        this.activeConversionRequest = null;
+        this.pendingConversion?.cancel();
+    }
+
+    convertInWorker(data, args) {
+        return new Promise((resolve, reject) => {
+            if (typeof Worker === 'undefined') {
+                reject(new Error('Background score conversion is not supported in this browser.'));
+                return;
+            }
+            const worker = new Worker(new URL('./src/midi2abc/convert-worker.js', document.baseURI));
+            let timer;
+            const finish = (error, abc) => {
+                clearTimeout(timer);
+                worker.terminate();
+                worker.onmessage = worker.onerror = worker.onmessageerror = null;
+                if (this.pendingConversion === job) this.pendingConversion = null;
+                if (error) reject(error);
+                else resolve(abc);
+            };
+            const job = { cancel: () => finish(null, '') };
+            this.pendingConversion = job;
+            worker.onmessage = ({ data }) => {
+                if (data.error) finish(new Error(data.error));
+                else if (typeof data.abc !== 'string') finish(new Error('Invalid converter response'));
+                else finish(null, data.abc);
+            };
+            worker.onerror = event => {
+                event.preventDefault?.();
+                finish(new Error(event.message || 'Score conversion worker failed to load'));
+            };
+            worker.onmessageerror = () => finish(new Error('Could not read the converter response'));
+            timer = setTimeout(() => finish(new Error('Score conversion timed out. You can continue without the score.')), 120000);
+            try {
+                // Transfer only our private MIDI copy, never detach the caller's data
+                // or the cached binary needed for subsequent requests.
+                worker.postMessage({ midi: data, binary: this.midi2abcBinary, args }, [data.buffer]);
+            } catch (error) {
+                finish(error);
+            }
+        });
     }
 
     /**
@@ -250,47 +280,18 @@ class ScoreManager {
      */
     async generateABCStringfromMIDI(midiFile, timeSignature = null, keySignature = null, unitLength = undefined) {
         if (!this.scoreAvailable) return '';
-        if (!this.midi2abcReady || !this.midi2abcBinary) {
-            console.error('midi2abc WASM module not ready');
-            this.handleAbcGenerationFailure('WASM module not ready');
-            return '';
-        }
+        this.cancelConversion();
+        const request = this.conversionRequest;
+        this.activeConversionRequest = request;
 
         if (unitLength === undefined) {
             unitLength = this.getActiveUnitLength();
         }
 
         try {
-            const request = this.conversionRequest = (this.conversionRequest || 0) + 1;
-            let output = '';
-            const converter = await window.midi2abcModule({
-                noInitialRun: true,
-                wasmBinary: this.midi2abcBinary,
-                print: text => { output += text + '\n'; },
-                printErr: text => console.error('WASM error:', text)
-            });
+            await this.initializeMidi2abc();
             if (request !== this.conversionRequest || !this.scoreAvailable) return '';
-            this.midi2abc = converter;
-            this.abcString = "";
-            // Convert the Midi object to array buffer
-            const midiArrayBuffer = midiFile.toArray();
-            const data = new Uint8Array(midiArrayBuffer);
-            
-            // Reset output before each conversion
-            this.abcOutput = "";
-            
-            // Ensure the file system is clean
-            try {
-                this.midi2abc.FS.unlink('/input.mid');
-            } catch (e) {
-                // File doesn't exist, that's fine
-            }
-            
-            // Write MIDI data to WASM filesystem
-            this.midi2abc.FS.writeFile('/input.mid', data);
-            
-            // Verify file was written correctly
-            const writtenData = this.midi2abc.FS.readFile('/input.mid');
+            const data = new Uint8Array(midiFile.toArray()).slice();
             
             // Call midi2abc conversion with optimized flags for score display
             // Build callMain args and include optional time signature (-m) if provided
@@ -321,13 +322,8 @@ class ScoreManager {
             } else {
                 args.push('-gk');
             }
-            const result = converter.callMain(args);
-            if (result !== 0) {
-                throw new Error(`midi2abc exited with status ${result}`);
-            }
-
-            // Get the output (this should be captured by the print function)
-            let abcOutput = output;
+            let abcOutput = await this.convertInWorker(data, args);
+            if (request !== this.conversionRequest || !this.scoreAvailable) return '';
             
             if (!abcOutput || abcOutput.trim().length === 0) {
                 console.warn('No ABC output generated');
@@ -354,13 +350,13 @@ class ScoreManager {
                         if (/^\s*V:/.test(abcLines[i])) vLineIndices.push(i);
                     }
 
-                    const tracks = midiFile.tracks || [];
+                    const tracks = (midiFile.tracks || []).filter(t => !t.notes || t.notes.length);
                     const max = Math.min(vLineIndices.length, tracks.length);
 
                     for (let i = 0; i < max; i++) {
                         const track = tracks[i];
                         const lineIdx = vLineIndices[i];
-                        if (!track || !track.name || !track.name.toString().trim()) continue;
+                        if (!track) continue;
 
                         let line = abcLines[lineIdx];
 
@@ -368,14 +364,12 @@ class ScoreManager {
                         if (/\bnm=|\bsnm=/.test(line)) continue;
 
                         // sanitize name and build shortname
-                        const fullName = track.name.toString().trim().replace(/"/g, "'");
+                        const program = track.instrument?.number ?? track.programChanges?.[0]?.number ?? 0;
+                        const name = track.name?.trim() || ScoreManager.gmNames[program]
+                            || track.instrument?.name || 'Piano';
+                        const fullName = String(name).trim().replace(/["\r\n]/g, "'");
                         // shortName: if name is <=3 chars use it as-is, otherwise use first char + last two chars
-                        let shortName;
-                        if (fullName.length <= 3) {
-                            shortName = fullName;
-                        } else {
-                            shortName = fullName.charAt(0) + fullName.slice(-2);
-                        }
+                        const shortName = Array.from(fullName).slice(0, 5).join('');
 
                         abcLines[lineIdx] = `${line} nm="${fullName}" snm="${shortName}"`;
                     }
@@ -393,10 +387,13 @@ class ScoreManager {
             return abcOutput;
             
         } catch (error) {
+            if (request !== this.conversionRequest || !this.scoreAvailable) return '';
             console.error('Error generating ABC notation:', error);
             console.error('Error stack:', error.stack);
             this.showAbcErrorNotification(`ABC generation error: ${error.message}`);
             return '';
+        } finally {
+            if (this.activeConversionRequest === request) this.activeConversionRequest = null;
         }
     }
 
@@ -629,7 +626,7 @@ class ScoreManager {
                     The musical score could not be generated from the current MIDI file.
                 </p>
                 <p style="margin-bottom: 25px; font-size: 0.9em; color: #bdc3c7;">
-                    <strong>Error:</strong> ${errorMessage}
+                     <strong>Error:</strong> <span id="abcErrorDetail"></span>
                 </p>
                 <p style="margin-bottom: 25px; line-height: 1.4;">
                     You can continue using the app without the score feature${isLocalFile ? ', or reload the page to try again.' : ', or reload the page to try again with your current settings.'}
@@ -638,6 +635,7 @@ class ScoreManager {
             </div>
         `;
 
+        modal.querySelector('#abcErrorDetail').textContent = errorMessage;
         // Add click handlers based on file type
         if (isLocalFile) {
             modal.querySelector('#reloadPage').addEventListener('click', () => {
@@ -694,6 +692,9 @@ class ScoreManager {
      * Dismisses the error notification and disables score functionality
      */
     dismissAbcErrorNotification() {
+        this.scoreViewRequest = (this.scoreViewRequest || 0) + 1;
+        this.cancelConversion();
+        this.scoreRegenerating = false;
         // Stop the four-bar follower before disabling score so no scheduled polling
         // or pending render can retrigger score generation errors.
         this.stopScoreFollowing();
@@ -716,140 +717,42 @@ class ScoreManager {
     }
 
     /**
-     * Renders the full ABC notation as a single continuous, non-wrapping line of
-     * music inside a horizontally-scrollable container. The whole score is
-     * pre-rendered once so the user (or the auto-follow logic during playback)
-     * can scroll smoothly through it without ever needing to re-render bars.
+     * Renders a bounded set of sections in a continuous horizontal viewport.
      * @param {string} containerId - ID of the container element to render into
      */
     renderScore(containerId = 'score') {
         if (!this.abcjs || !this.abcString.trim()) {
-             console.warn('No ABC data or abcjs library to render');
-             return;
-         }
-
-         try {
-             const scoreElement = document.getElementById(containerId);
-             if (!scoreElement) return;
-
-             scoreElement.innerHTML = ''; // Clear previous score content
-
-             // Set maximum height constraint; horizontal scrolling reveals the rest.
-             // overflow-y is 'auto' (not 'hidden') so zoomed-in content can also be
-             // panned vertically, not just horizontally.
-             const maxHeight = this.getScoreMaxHeight(containerId);
-             scoreElement.style.maxHeight = `${maxHeight}px`;
-             scoreElement.style.overflowY = 'auto';
-             scoreElement.style.overflowX = 'auto';
-             scoreElement.style.scrollBehavior = 'smooth';
-
-             // 'wrap' forces every bar onto a single unbroken horizontal line
-             // (enabling smooth pre-rendered scrolling) while minSpacing/maxSpacing
-             // keep note spacing natural. Both preferredMeasuresPerLine and
-             // staffwidth must scale with the actual bar count: a fixed
-             // preferredMeasuresPerLine bigger than the piece reserves blank
-             // trailing space for the non-existent extra measures (short pieces),
-             // while a fixed staffwidth too small for the piece forces an
-             // unwanted second line (long pieces) - and re-running the wrap
-             // algorithm's line-fitting search over a mismatched budget is also
-             // what made rendering sluggish/prone to freezing on longer pieces.
-             const totalBars = Math.max(1, this.getTotalBarsFromABC(this.abcString) || 0);
-             const wrap = {
-                preferredMeasuresPerLine: totalBars,
-                minSpacing: 1.8,
-                maxSpacing: 2.7
-             };
-             // Generous per-bar estimate so the single line almost never falls
-             // short even for dense music - actual rendered width still only
-             // reflects real content width (maxSpacing bounds it), it's not
-             // stretched to fill this budget.
-             const staffwidth = Math.max(2000, totalBars * 500);
-
-             const renderOptions = {
-                staffwidth,
-                wrap,
-                scale: 1.0,
-                foregroundColor: '#000000',
-                backgroundColor: 'transparent',
-                percussion: true,
-                drumBars: 1
-             };
-
-             const visualOptions = {
-                add_classes: true,
-                staffwidth,
-                wrap,
-                displayPercussion: true
-             };
-
-             // Tone represents 6/8 as three quarter-note beats, not as notation.
-             // Render the converter's meter without rewriting it from playback.
-             const rendered = this.abcjs.renderAbc(containerId, this.abcString, renderOptions, visualOptions);
-             this.visualObj = (rendered && rendered[0]) || null;
-             this._renderedAbcString = this.abcString;
-
-             // Re-apply the current zoom level (persists across re-renders, e.g.
-             // when toggling fullscreen or regenerating the ABC) before measuring.
-             this.applyScoreZoom(containerId);
-
-             // (Re)bind timing callbacks to the freshly rendered tune so note
-             // highlighting and auto-scroll-follow stay in sync with the new layout.
-             this.setupTimingCallbacks();
-             this.setupScoreScrollInteractions(containerId);
-             this.setupScorePinchZoom(containerId);
-
-             setTimeout(() => {
-                const scoreElement = document.getElementById(containerId);
-                if (scoreElement) {
-                    const svgElement = scoreElement.querySelector('svg');
-                    if (svgElement) {
-                        this.fitScoreHeight(containerId);
-                    }
-
-                    // Enhanced CSS for drum notation, plus the red "currently playing" highlight
-                    let style = document.getElementById(`${containerId}-dynamic-style`);
-                    if (!style) {
-                        style = document.createElement('style');
-                        style.id = `${containerId}-dynamic-style`;
-                        document.head.appendChild(style);
-                    }
-                    style.textContent = `
-                        #${containerId} {
-                            overflow-y: auto;
-                            overflow-x: auto;
-                        }
-                        #${containerId} .abcjs-note,
-                        #${containerId} .abcjs-note_selected,
-                        #${containerId} .abcjs-staff,
-                        #${containerId} .abcjs-clef,
-                        #${containerId} .abcjs-key-signature,
-                        #${containerId} .abcjs-time-signature,
-                        #${containerId} .abcjs-bar,
-                        #${containerId} .abcjs-stem,
-                        #${containerId} .abcjs-ledger,
-                        #${containerId} .abcjs-slur,
-                        #${containerId} .abcjs-tie {
-                            fill: #000000 !important;
-                            stroke: #000000 !important;
-                            color: #000000 !important;
-                        }
-                        #${containerId} text {
-                            fill: #000000 !important;
-                            color: #000000 !important;
-                        }
-                        #${containerId} .note-playing,
-                        #${containerId} .note-playing * {
-                            fill: #d00000 !important;
-                            stroke: #d00000 !important;
-                        }
-                    `;
-                }
-            }, 100);
-
-            // console.log('ABC score rendered successfully');
-        } catch (error) {
-            console.error('Error rendering ABC score:', error);
+            return;
         }
+        const el = document.getElementById(containerId);
+        if (!el) return;
+        el.style.maxHeight = `${this.getScoreMaxHeight(containerId)}px`;
+        el.style.overflow = 'auto';
+        // Distant seeks must be immediate, not animate across hundreds of sections.
+        el.style.scrollBehavior = 'auto';
+        if (!this.virtualScore || this._renderedAbcString !== this.abcString ||
+            this.virtualScore.root.parentNode !== el) {
+            this.virtualScore?.dispose();
+            this.timingCallbacks?.stop?.();
+            this.timingCallbacks = null;
+            this.visualObj = null;
+            this._scoreEvents = [];
+            this.virtualScore = new VirtualScore(this, el, this.abcString);
+            this._renderedAbcString = this.abcString;
+        } else {
+            this.virtualScore.zoom();
+        }
+        this.setupScoreScrollInteractions(containerId);
+        this.setupScorePinchZoom(containerId);
+        let style = document.getElementById(`${containerId}-dynamic-style`);
+        if (!style) {
+            style = document.createElement('style');
+            style.id = `${containerId}-dynamic-style`;
+            document.head.appendChild(style);
+        }
+        style.textContent = `#${containerId} svg {color:#000;fill:#000}
+            #${containerId} .note-playing, #${containerId} .note-playing * {fill:#d00000!important;stroke:#d00000!important}`;
+        this.fitScoreHeight(containerId);
     }
 
     /**
@@ -999,8 +902,10 @@ class ScoreManager {
                 this.setScoreZoom((this.scoreZoom || 1) * (1 + zoomDelta), containerId, anchor);
                 return;
             }
+            this._manualScrollUntil = Date.now() + 1000;
             if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
                 e.preventDefault();
+                this._manualScrollUntil = Date.now() + 1000;
                 const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
                 const next = Math.max(0, Math.min(maxScroll, el.scrollLeft + e.deltaY * this.scoreScrollAccelerationFactor));
                 // Instant (not smooth) so successive wheel ticks accumulate from the real
@@ -1016,6 +921,9 @@ class ScoreManager {
                 }
             }
         }, { passive: false });
+        el.addEventListener('pointerdown', () => {
+            this._manualScrollUntil = Date.now() + 2000;
+        }, { passive: true });
 
         // Native touch dragging scrolls the container directly; scrub playback with it too.
         let touchScrubbing = false;
@@ -1023,6 +931,7 @@ class ScoreManager {
         el.addEventListener('touchend', () => { touchScrubbing = false; });
         el.addEventListener('touchcancel', () => { touchScrubbing = false; });
         el.addEventListener('scroll', () => {
+            if (touchScrubbing) this._manualScrollUntil = Date.now() + 1000;
             if (!touchScrubbing || !this.isFullscreen) return;
             this._manualScrollUntil = Date.now() + 250;
             this.seekPlaybackToScrollPosition(containerId);
@@ -1122,6 +1031,10 @@ class ScoreManager {
      * @param {string} containerId - Container element ID
      */
     applyScoreZoom(containerId = 'score') {
+        if (this.virtualScore) {
+            this.virtualScore.zoom();
+            return;
+        }
         const el = document.getElementById(containerId);
         if (!el) return;
         const content = el.firstElementChild;
@@ -1138,7 +1051,9 @@ class ScoreManager {
      * which will replace the placeholder content.
      */
     hideScoreLoadingIndicator() {
+        if (this.activeConversionRequest) return;
         this.scoreRegenerating = false;
+        this.syncTimingToPlayback();
     }
 
     /**
@@ -1168,25 +1083,28 @@ class ScoreManager {
      * signature, or shifting the score start.
      * @async
      * @param {string} containerId - Container element ID (default: 'score')
-     * @returns {Promise<void>} Resolves after yielding a couple of frames so the
-     * browser has a chance to actually paint the indicator before any subsequent
-     * synchronous/blocking WASM work runs on the main thread.
+     * @returns {Promise<void>} Resolves after setting the placeholder. Conversion
+     * runs off-thread, so no artificial animation-frame delay is needed.
      */
     async showScoreLoadingIndicator(containerId = 'score') {
         this.scoreRegenerating = true;
+        this.virtualScore?.dispose();
+        this.virtualScore = null;
         const scoreElement = document.getElementById(containerId);
-        if (scoreElement) {
-            scoreElement.innerHTML = '<p style="padding: 20px; text-align: center;">🔄 Updating score…</p>';
-        }
-        // Yield to the browser (double rAF) so the placeholder is actually painted
-        // before we proceed with the (potentially blocking) ABC regeneration.
-        await new Promise((resolve) => {
-            if (typeof window !== 'undefined' && window.requestAnimationFrame) {
-                window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
-            } else {
-                setTimeout(resolve, 0);
-            }
+        if (scoreElement) this.setScoreLoadingMessage(scoreElement, 'Updating score…');
+    }
+
+    setScoreLoadingMessage(element, message) {
+        element.innerHTML = `<p role="status" style="padding:20px;text-align:center;">${message}</p>`;
+        const button = document.createElement('button');
+        button.className = 'btn btn-secondary';
+        button.textContent = 'Continue Without Score';
+        button.addEventListener('click', () => {
+            this.dismissAbcErrorNotification();
+            const container = document.getElementById('scoreContainer');
+            if (container) container.style.display = 'none';
         });
+        element.appendChild(button);
     }
 
     /**
@@ -1214,6 +1132,7 @@ class ScoreManager {
                     const ts = this.getActiveTimeSignature();
                     const ks = this.getActiveKeySignature();
                     abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts, ks);
+                    if (!abcNotation) return;
                 }
             }
 
@@ -1333,10 +1252,6 @@ class ScoreManager {
                     const ks = this.getActiveKeySignature();
                     const abcNotation = await this.generateABCStringfromMIDI(currentMidi, ts, ks);
                     if (!abcNotation) {
-                         const scoreElement = document.getElementById(containerId);
-                         if (scoreElement) {
-                             scoreElement.innerHTML = '<p>Could not generate score data</p>';
-                         }
                          return;
                      }
                      // Update the stored abcString with the regenerated notation
@@ -1372,12 +1287,14 @@ class ScoreManager {
          // finished loading before generating/rendering - otherwise a render
          // attempted before the dynamically-loaded abcjs script arrives
          // silently no-ops and this placeholder is never replaced.
-         scoreDiv.innerHTML = '<p style="padding: 20px; text-align: center;">🔄 Generating score…</p>';
+         const viewRequest = this.scoreViewRequest || 0;
+         this.setScoreLoadingMessage(scoreDiv, 'Generating score…');
          try {
              await this.loadModules();
          } catch (err) {
              console.error('Failed to load score modules:', err);
          }
+         if (viewRequest !== (this.scoreViewRequest || 0) || !this.scoreAvailable) return;
          if (!this.abcjs) {
              scoreDiv.innerHTML = '<p>Could not load the score renderer. Please try again.</p>';
              return;
@@ -1672,10 +1589,7 @@ class ScoreManager {
      */
     updateScoreFollower(containerId = 'score') {
         this.renderScore(containerId);
-        const transport = this.app.modules.transport;
-        if (transport && transport.playing) {
-            this.syncTimingToPlayback();
-        }
+        this.syncTimingToPlayback();
     }
 
     /**
@@ -1693,17 +1607,14 @@ class ScoreManager {
         this.currentBarStart = 0;
         this.lastPolledBar = null;
 
-        if (!this.visualObj || this._renderedAbcString !== this.abcString) {
-            this.renderScore(containerId);
-        } else {
-            this.setupTimingCallbacks();
-        }
+        this.renderScore(containerId);
 
         const scoreElement = document.getElementById(containerId);
         if (scoreElement && !this.isFullscreen) {
             scoreElement.scrollLeft = 0;
         }
 
+        this.syncTimingToPlayback();
         this.startPollingForPlayback(containerId);
     }
 
@@ -1749,16 +1660,24 @@ class ScoreManager {
      * note actually sounding at that position.
      */
     syncTimingToPlayback() {
-        if (!this.timingCallbacks || typeof window === 'undefined' || !window.Tone) {
+        if ((!this.virtualScore && !this.timingCallbacks) || this.scoreRegenerating ||
+            typeof window === 'undefined' || !window.Tone) {
             return;
         }
         try {
             const state = this.app.state;
             const speed = state.speed || 1;
-            const wallDuration = (this.app.track_duration || 0) / speed;
             const wallPos = window.Tone.Transport.seconds || 0;
-            const effectiveWall = state.reversedPlayback ? (wallDuration - wallPos) : wallPos;
-            const musicalSeconds = Math.max(0, effectiveWall * speed);
+            // The exported score is already reversed. Its timeline advances
+            // with the transport in both modes; only the original-piece slider
+            // counts backwards. Inverting here reverses the score a second time.
+            const musicalSeconds = Math.max(0, wallPos * speed);
+            if (this.virtualScore) {
+                if (!this._manualScrollUntil || Date.now() >= this._manualScrollUntil) {
+                    this.virtualScore.follow(musicalSeconds * 1000);
+                }
+                return;
+            }
             // abcjs's own setProgress()/eventCallback highlights the *next
             // upcoming* event (the first one at/after the given time) rather
             // than the one currently sounding, which made the highlight look
@@ -1832,12 +1751,18 @@ class ScoreManager {
 
         const zoom = this.scoreZoom || 1;
         const contentX = (scoreElement.scrollLeft + scoreElement.clientWidth / 2) / zoom;
-        const event = this.findScoreEventAtPixel(contentX);
+        const event = this.virtualScore
+            ? { milliseconds: this.virtualScore.timeAtPixel(contentX) }
+            : this.findScoreEventAtPixel(contentX);
         if (!event || typeof event.milliseconds !== 'number') return;
 
         const state = this.app.state;
         const speed = state.speed || 1;
-        const piecePosition = (event.milliseconds / 1000) / speed;
+        const elapsed = (event.milliseconds / 1000) / speed;
+        const wallDuration = (this.app.track_duration || 0) / speed;
+        // seekToPiecePosition accepts the slider's original-piece coordinate,
+        // not elapsed time in the already-reversed score.
+        const piecePosition = state.reversedPlayback ? wallDuration - elapsed : elapsed;
         transport.seekToPiecePosition(piecePosition, { syncScore: false });
     }
 
@@ -2072,12 +1997,20 @@ class ScoreManager {
      * Hides the score display and cleans up score following resources
      */
     hideScore() {
+        this.scoreViewRequest = (this.scoreViewRequest || 0) + 1;
+        this.cancelConversion();
+        this.scoreRegenerating = false;
         if (this.isFullscreen) {
             this.exitFullscreen();
         }
 
         // console.log('Hiding score and cleaning up score follower');
         this.stopScoreFollowing();
+        this.virtualScore?.dispose();
+        this.virtualScore = null;
+        this.visualObj = null;
+        this._scoreEvents = [];
+        this._renderedAbcString = null;
         this.scoreShown = false;
         this.abcString = "";
 

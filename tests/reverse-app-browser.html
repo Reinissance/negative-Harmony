@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Reverse playback in the complete app</title>
+<pre id="result">Running full-app reverse playback…</pre>
+<iframe src="../" style="width:1200px;height:700px"></iframe>
+<script>
+window.done = (async () => {
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const check = (ok, message) => { if (!ok) throw Error(message); };
+    const frame = document.querySelector('iframe');
+    const w = frame.contentWindow;
+    const until = async predicate => {
+        const deadline = Date.now() + 30000;
+        while (!predicate()) {
+            if (Date.now() > deadline) throw Error('Timed out: ' + predicate);
+            await wait(100);
+        }
+    };
+    let transport, score;
+    try {
+        await until(() => w.eval('typeof app !== "undefined" && app?.modules.scoreManager?.abcjs'));
+        const app = w.eval('app');
+        transport = app.modules.transport;
+        score = app.modules.scoreManager;
+        await w.Tone.start();
+        const midi = new w.Midi();
+        midi.header.setTempo(120);
+        midi.header.timeSignatures = [{ticks:0, timeSignature:[4,4]}];
+        const track = midi.addTrack();
+        for (let i=0; i<64; i++) track.addNote({midi:60+i%12,ticks:i*960,durationTicks:960,velocity:.7});
+        app.state.mode = 0;
+        app.state.negRoot = 60;
+        app.bpm = 120;
+        transport.scheduleMIDIEvents(midi);
+        const heard = [];
+        transport.handleMidiMessage = message => {
+            if ((message.data[0] & 240) === 144) heard.push({pitch:message.data[1], seconds:w.Tone.Transport.seconds});
+        };
+        score.showScore();
+        await until(() => score.virtualScore && !score.scoreRegenerating);
+        w.document.getElementById('reverseMidi').click();
+        await wait(500);
+        await until(() => !score.scoreRegenerating);
+        transport.startPlayback(w.document.getElementById('playMidi'));
+        const samples = [];
+        for (let i=0;i<20;i++) {
+            await wait(250);
+            samples.push({time:w.Tone.Transport.seconds, score:score.virtualScore.lastTime,
+                scroll:w.document.getElementById('score').scrollLeft,
+                note: score.virtualScore.mounted.get(score.virtualScore.index.atTime(score.virtualScore.lastTime))?.events
+                    .filter(e => e.elements?.flat(Infinity).includes(score.highlightedElements[0]))
+                    .map(e => e.midiPitches),
+                slider:Number(transport.progressSlider.value)});
+        }
+        check(samples[0].score < 2000, 'Started at the end: '+JSON.stringify(samples));
+        check(samples.every((s,i) => !i || s.score >= samples[i-1].score), 'Score ran backwards: '+JSON.stringify(samples));
+        check(samples.at(-1).slider < samples[0].slider, 'Slider did not decrease: '+JSON.stringify(samples));
+        check(heard.length >= 2, 'No scheduled notes fired: '+JSON.stringify({samples,heard}));
+        return document.getElementById('result').textContent = 'PASS: full app, generated MIDI → score, actual Reverse click, live playback.\n'+JSON.stringify({samples,heard});
+    } catch(error) {
+        return document.getElementById('result').textContent = 'FAIL: '+error.stack;
+    } finally {
+        score?.stopPollingForPlayback();
+        if (transport) { transport.playing = false; w.Tone.Transport.stop(); w.Tone.Transport.cancel(); }
+    }
+})();
+</script>

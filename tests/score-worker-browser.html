@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<base href="../">
+<title>Background MIDI conversion test</title>
+<style>body{font:16px system-ui;margin:24px}pre{white-space:pre-wrap}button{padding:12px}</style>
+<h1>Background MIDI conversion</h1>
+<p>Real Web Worker and bundled midi2abc WASM: 24 voices × 8,000 notes.</p>
+<pre id="result">Running…</pre>
+<button onclick="this.textContent='Page is responsive'">Check responsiveness</button>
+<div id="scoreContainer"><div id="score"></div></div>
+<button id="showScore" hidden>Show score</button>
+<script src="tests/midi-fixture.js"></script>
+<script src="src/score-manager.js"></script>
+<script>
+window.done = (async () => {
+    const result = document.getElementById('result');
+    const check = (v, message) => { if (!v) throw Error(message); };
+    const manager = new ScoreManager({ state: {}, modules: {} });
+    manager.showAbcErrorNotification = message => { throw Error(message); };
+    try {
+        const large = orchestralMidi();
+        await manager.initializeMidi2abc();
+        const binary = manager.midi2abcBinary;
+        let ticks = 0;
+        const heartbeat = setInterval(() => ticks++, 10);
+        const start = performance.now();
+        let abc;
+        try { abc = await manager.generateABCStringfromMIDI(large, [4,4], 0); }
+        finally { clearInterval(heartbeat); }
+        const elapsed = Math.round(performance.now() - start);
+        check(/^X:/m.test(abc), 'No ABC generated');
+        check((abc.match(/^V:/gm) || []).length === 24, 'Missing voices');
+        check(ticks > 2, 'Main thread heartbeat stopped');
+        check(!manager.pendingConversion, 'Worker was not released');
+        check(large.toArray().byteLength > 0, 'Source MIDI was detached');
+        const old = manager.generateABCStringfromMIDI(large, [3,4], -1);
+        await new Promise(r => setTimeout(r, 20));
+        const latest = manager.generateABCStringfromMIDI(orchestralMidi(1,8), [6,8], 1);
+        check(await old === '', 'Superseded conversion returned data');
+        check(/^M:\s*6\/8\s*$/m.test(await latest), 'Latest settings were not applied');
+        check(manager.midi2abcBinary === binary, 'Binary cache was replaced');
+        const automatic = await manager.generateABCStringfromMIDI(orchestralMidi(1,8));
+        check(/^M:\s*4\/4\s*$/m.test(automatic), 'Explicit meter leaked into automatic conversion');
+        await manager.showScoreLoadingIndicator();
+        const cancelled = manager.generateABCStringfromMIDI(large);
+        await new Promise(r => setTimeout(r, 20));
+        document.querySelector('#score button').click();
+        check(await cancelled === '', 'Continue without score did not cancel');
+        check(!manager.pendingConversion && !manager.scoreAvailable, 'Cancellation leaked state');
+        result.textContent = `PASS: ${elapsed} ms conversion; ${ticks} main-thread heartbeats.\n24 voices preserved; newest request wins; binary reused; fresh meter state; cancellation and worker cleanup verified.`;
+    } catch (error) {
+        manager.cancelConversion();
+        result.textContent = 'FAIL: ' + error.stack;
+    }
+    return result.textContent;
+})();
+</script>

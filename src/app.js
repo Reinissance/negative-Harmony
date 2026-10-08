@@ -171,6 +171,7 @@ class NegativeHarmonyApp {
                 './src/audio-engine.js',
                 './src/settings-manager.js',
                 './src/transport.js',
+                './src/virtual-score.js',
                 './src/score-manager.js'
             ];
 

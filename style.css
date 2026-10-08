@@ -1,3 +1,18 @@
+#scoreContainer, #scoreContainer #score {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+}
+#scoreContainer { overflow: hidden; }
+#scoreContainer #score { max-width: 100% !important; overflow: auto; }
+#scoreContainer .score-header { flex-wrap: wrap; min-width: 0; }
+#score-footer, #score-footer > div {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+#score-footer select { max-width: 100%; }
 .st-btn, .st-btn-compact, .st-share-button {
     transition: none !important;
     animation: none !important;
